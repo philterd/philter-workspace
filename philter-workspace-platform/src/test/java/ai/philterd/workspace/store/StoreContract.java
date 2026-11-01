@@ -674,6 +674,87 @@ public abstract class StoreContract {
     }
 
     @Test
+    void credentialsReasonsAndIngestErrorsAreEncryptedAtRest() {
+        // #77: the SMTP password.
+        final ai.philterd.workspace.model.NotificationSettings smtp = new ai.philterd.workspace.model.NotificationSettings();
+        smtp.setId("notifications");
+        smtp.setPassword("smtp-secret-77");
+        repository(ai.philterd.workspace.repository.NotificationSettingsRepository.class).save(smtp);
+        assertEncryptedAtRest(ai.philterd.workspace.model.NotificationSettings.class, "notifications", "smtp-secret-77");
+        assertEquals("smtp-secret-77", repository(ai.philterd.workspace.repository.NotificationSettingsRepository.class)
+                .findById("notifications").orElseThrow().getPassword());
+
+        // An overturn reason in the audit log, and on the certificate.
+        final ai.philterd.workspace.model.AuditLog entry = new ai.philterd.workspace.model.AuditLog();
+        entry.setId("a-77");
+        entry.setAction("SPAN_UPDATE");
+        entry.setDetails(new java.util.LinkedHashMap<>(java.util.Map.of("overturn", true,
+                "reason", "Jane Roe's SSN, 123-45-6789, is quoted in the exhibit")));
+        repository(ai.philterd.workspace.repository.AuditLogRepository.class).save(entry);
+        assertEncryptedAtRest(ai.philterd.workspace.model.AuditLog.class, "a-77", "123-45-6789");
+        final ai.philterd.workspace.model.AuditLog readEntry = repository(
+                ai.philterd.workspace.repository.AuditLogRepository.class).findById("a-77").orElseThrow();
+        assertEquals("Jane Roe's SSN, 123-45-6789, is quoted in the exhibit", readEntry.getDetails().get("reason"));
+        assertEquals(true, readEntry.getDetails().get("overturn"), "the other details are as they were");
+
+        final RedactionCertificate certificate = new RedactionCertificate();
+        certificate.setId("cert-77");
+        final RedactionCertificate.OverturnEntry overturn = new RedactionCertificate.OverturnEntry();
+        overturn.setReason("Quoted 555-0177 in the margin");
+        certificate.setOverturns(new ArrayList<>(List.of(overturn)));
+        repository(RedactionCertificateRepository.class).save(certificate);
+        assertEncryptedAtRest(RedactionCertificate.class, "cert-77", "555-0177");
+        assertEquals("Quoted 555-0177 in the margin", repository(RedactionCertificateRepository.class)
+                .findById("cert-77").orElseThrow().getOverturns().get(0).getReason());
+
+        // An ingest job's error and failure messages, and an import log entry.
+        final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
+        job.setId("job-77");
+        job.setErrorMessage("Duplicate entry 'jroe@example.com' for key 'email'");
+        job.getFailureMessages().add("Row 'Jane Roe' could not be read");
+        repository(ai.philterd.workspace.repository.BackgroundJobRepository.class).save(job);
+        assertEncryptedAtRest(ai.philterd.workspace.model.BackgroundJob.class, "job-77", "jroe@example.com");
+        assertEncryptedAtRest(ai.philterd.workspace.model.BackgroundJob.class, "job-77", "Jane Roe");
+        final ai.philterd.workspace.model.BackgroundJob readJob = repository(
+                ai.philterd.workspace.repository.BackgroundJobRepository.class).findById("job-77").orElseThrow();
+        assertEquals("Duplicate entry 'jroe@example.com' for key 'email'", readJob.getErrorMessage());
+        assertEquals(List.of("Row 'Jane Roe' could not be read"), readJob.getFailureMessages());
+
+        final ai.philterd.workspace.model.DataImportLogEntry logEntry = new ai.philterd.workspace.model.DataImportLogEntry();
+        logEntry.setId("log-77");
+        logEntry.setJobId("job-77");
+        logEntry.setMessage("Value 'Jane Roe' is too long");
+        repository(ai.philterd.workspace.repository.DataImportLogEntryRepository.class).save(logEntry);
+        assertEncryptedAtRest(ai.philterd.workspace.model.DataImportLogEntry.class, "log-77", "Jane Roe");
+        assertEquals("Value 'Jane Roe' is too long", repository(
+                ai.philterd.workspace.repository.DataImportLogEntryRepository.class).findById("log-77").orElseThrow()
+                .getMessage());
+    }
+
+    @Test
+    void valuesStoredInTheClearBeforeEncryptionStillRead() {
+        // #77: existing values read as they are until their next save encrypts them.
+        final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
+        job.setId("job-legacy");
+        job.setErrorMessage("placeholder");
+        repository(ai.philterd.workspace.repository.BackgroundJobRepository.class).save(job);
+        setField(ai.philterd.workspace.model.BackgroundJob.class, "job-legacy", "errorMessage", "plain old error");
+
+        final ai.philterd.workspace.repository.BackgroundJobRepository jobs =
+                repository(ai.philterd.workspace.repository.BackgroundJobRepository.class);
+        final ai.philterd.workspace.model.BackgroundJob read = jobs.findById("job-legacy").orElseThrow();
+        assertEquals("plain old error", read.getErrorMessage());
+        jobs.save(read);
+        assertEncryptedAtRest(ai.philterd.workspace.model.BackgroundJob.class, "job-legacy", "plain old error");
+    }
+
+    private void assertEncryptedAtRest(final Class<?> type, final String id, final String value) {
+        final String raw = raw(type, id);
+        assertFalse(raw.contains(value), raw);
+        assertTrue(raw.contains("enc:v1:"), raw);
+    }
+
+    @Test
     void aDocumentsCaseNumberAndFilerAreEncryptedAndItsCaseTypeIsNot() {
         final Document d = new Document();
         d.setId("case-1");

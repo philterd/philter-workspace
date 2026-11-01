@@ -313,9 +313,14 @@ The fields encrypted at rest are:
 | `document_comments`| `text`           | Reviewer-supplied free text that may reference PII.                   |
 | `redaction_certificates` | `documentFilename` | Filenames often carry names or record numbers.          |
 | `redaction_certificates` | overturned span text | The literal PII on each overturned decision.             |
+| `redaction_certificates` | overturn reason | The reason a reviewer gave for overturning a decision, which can quote PII. |
+| `audit_log`        | `details.reason` | A reason a person typed, such as for overturning another reviewer's decision. The entry's other details are not encrypted. |
 | `pending_uploads`  | `content`        | The bytes of an uploaded file (text or PDF) waiting in the ingest queue. Removed once the document is redacted; kept, still encrypted, while a failed document remains. |
 | `detection_rules`  | `text`           | A value reviewers decided Philter should never, or always, flag. Found by a keyed hash of its lower-cased form (`textKey`), not by the value. |
 | `settings`         | `opensearchPassword` | The OpenSearch basic-auth password (the general settings).   |
+| `settings`         | `password`       | The SMTP password (the notification settings). Never shown back on Admin → Notifications. |
+| `background_jobs`  | `errorMessage`, `failureMessages` | Why an import or export failed, which can quote values from the source, such as a database error naming a row's value. |
+| `data_import_log_entries` | `message` | Why one item of an import failed, for the same reason. |
 
 Other fields on these documents (status, timestamps, source attribution,
 hashes, lock metadata, span coordinates, reviewer attribution) are stored
@@ -412,6 +417,14 @@ the same ones encrypted at rest in MongoDB:
 - Comment `text`.
 - User-supplied search queries (a reviewer searching for an email or phone
   number must not pin that string in the log file).
+- Exception text from an import, export, or the ingest queue. A database
+  driver or JSON parser error can quote the value it failed on, so these
+  failures are logged with the job, its type and source, and the exception's
+  class and its causes' classes, with no message and no stack trace at any log
+  level. The full reason is kept, encrypted, on the job and its import log,
+  where administrators see it on the Jobs page. A failed call to an LLM for
+  an explanation or a second opinion is logged the same way, since the error
+  can quote the model's reply.
 
 Network call sites that interact with stores carrying this content
 (OpenSearch indexing, OpenSearch search, OpenSearch `more_like_this`,

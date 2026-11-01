@@ -151,8 +151,9 @@ public class DataImportDispatcher {
                         job.getType(), job.getId());
             }
         } catch (Exception e) {
-            log.error("DataImportDispatcher: job {} threw an unexpected exception",
-                    job.getId(), e);
+            // Classes only: the exception can quote values from the source (#77).
+            log.error("DataImportDispatcher: job {} ({} from {}) threw an unexpected exception: {}",
+                    job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
         }
     }
 }

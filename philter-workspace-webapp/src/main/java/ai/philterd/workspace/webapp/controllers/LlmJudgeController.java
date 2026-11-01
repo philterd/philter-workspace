@@ -220,7 +220,8 @@ public class LlmJudgeController {
         } catch (ResponseStatusException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("Failed to call Ollama at {}: {}", base, e.getMessage());
+            // Classes only: the error can quote the model's reply, which can quote the document (#77).
+            log.warn("Failed to call Ollama at {}: {}", base, ai.philterd.workspace.service.ErrorClasses.of(e));
             throw new ResponseStatusException(BAD_GATEWAY,
                     "Ollama instance unavailable.");
         }
@@ -297,7 +298,8 @@ public class LlmJudgeController {
         } catch (ResponseStatusException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("Failed to call Ollama at {}: {}", base, e.getMessage());
+            // Classes only: the error can quote the model's reply, which can quote the document (#77).
+            log.warn("Failed to call Ollama at {}: {}", base, ai.philterd.workspace.service.ErrorClasses.of(e));
             throw new ResponseStatusException(BAD_GATEWAY,
                     "Ollama instance unavailable.");
         }

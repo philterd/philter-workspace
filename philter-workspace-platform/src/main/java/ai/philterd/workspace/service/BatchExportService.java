@@ -240,7 +240,7 @@ public class BatchExportService {
         try {
             rendered = renderCombined(job, lineRenderer);
         } catch (IOException e) {
-            LOG.warn("Failed to render {} for job {}: {}", format.name(), job.getId(), e.toString());
+            LOG.warn("Failed to render {} for job {}: {}", format.name(), job.getId(), ErrorClasses.of(e));
             finish(job, BackgroundJob.STATUS_FAILED,
                     "Could not render " + format.name() + ": " + e.getMessage());
             return;
@@ -441,7 +441,7 @@ public class BatchExportService {
                         // sample failure message attached so the operator can
                         // see what went wrong from the Jobs page.
                         LOG.warn("Skipping document {} in export job {}: {}",
-                                doc.getId(), job.getId(), e.toString());
+                                doc.getId(), job.getId(), ErrorClasses.of(e));
                         failed++;
                         recordFailureSample(job, doc.getId(), e);
                         continue;

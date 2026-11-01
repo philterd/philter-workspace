@@ -164,7 +164,7 @@ public class IngestQueueService {
                 processOne(claimed);
             }
         } catch (Exception e) {
-            log.warn("Ingest queue drain failed: {}", e.getMessage());
+            log.warn("Ingest queue drain failed: {}", ErrorClasses.of(e));
         } finally {
             processing.set(false);
         }
@@ -192,7 +192,7 @@ public class IngestQueueService {
                 log.info("Reclaimed {} stuck PROCESSING document(s) older than {}", n, STUCK_CLAIM_TTL);
             }
         } catch (Exception e) {
-            log.warn("Stuck-claim recovery failed: {}", e.getMessage());
+            log.warn("Stuck-claim recovery failed: {}", ErrorClasses.of(e));
         }
     }
 
@@ -212,7 +212,7 @@ public class IngestQueueService {
             } catch (UnresolvedPolicyException e) {
                 // Flagged, not redacted with another policy. The reason names only the case type, never the
                 // filing's other metadata. Retried from Admin, Ingest Queue once the document or mapping is fixed.
-                log.info("Document {}: not redacted: {}", doc.getId(), e.getMessage());
+                log.info("Document {}: not redacted: {}", doc.getId(), ErrorClasses.of(e));
                 markFailed(doc, e.getMessage(), null);
                 return;
             }

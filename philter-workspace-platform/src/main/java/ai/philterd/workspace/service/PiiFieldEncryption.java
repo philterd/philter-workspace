@@ -9,10 +9,14 @@
  */
 package ai.philterd.workspace.service;
 
+import ai.philterd.workspace.model.AuditLog;
+import ai.philterd.workspace.model.BackgroundJob;
+import ai.philterd.workspace.model.DataImportLogEntry;
 import ai.philterd.workspace.model.DetectionRule;
 import ai.philterd.workspace.model.Document;
 import ai.philterd.workspace.model.DocumentComment;
 import ai.philterd.workspace.model.GeneralSettings;
+import ai.philterd.workspace.model.NotificationSettings;
 import ai.philterd.workspace.model.PendingUpload;
 import ai.philterd.workspace.model.RedactionCertificate;
 import ai.philterd.workspace.model.Span;
@@ -52,6 +56,14 @@ import java.util.function.UnaryOperator;
  *         waiting in the ingest queue, with {@link SymmetricCipher#encryptBytes}.</li>
  *     <li>{@link DetectionRule#getText() DetectionRule.text}: a value reviewers decided Philter
  *         should never, or always, flag.</li>
+ *     <li>{@link NotificationSettings#getPassword() NotificationSettings.password}: the SMTP password (#77).</li>
+ *     <li>An {@link AuditLog} entry's {@code reason} detail, such as the reason for overturning another
+ *         reviewer's decision, and each {@link RedactionCertificate.OverturnEntry#getReason() overturn's reason}
+ *         on a certificate (#77).</li>
+ *     <li>{@link BackgroundJob#getErrorMessage() BackgroundJob.errorMessage} and its
+ *         {@link BackgroundJob#getFailureMessages() failureMessages}, and a
+ *         {@link DataImportLogEntry#getMessage() DataImportLogEntry.message}: exception text that can quote
+ *         values from the source (#77).</li>
  * </ul>
  *
  * <h3>How it works</h3>
@@ -100,14 +112,18 @@ public final class PiiFieldEncryption {
      * The encrypted fields as paths in the stored document, for {@link #encryptStored}. {@code name[]} is each
      * element of a list. They are the fields {@link #apply} lists, as the stores name them.
      */
-    private static final Map<Class<?>, List<String>> STORED_PATHS = Map.of(
+    static final Map<Class<?>, List<String>> STORED_PATHS = Map.of(
             Document.class, List.of("originalText", "redactedText", "failureMessage",
                     "caseMetadata.caseNumber", "caseMetadata.filer"),
             Span.class, List.of("text"),
             GeneralSettings.class, List.of("opensearchPassword"),
             DocumentComment.class, List.of("text"),
             DetectionRule.class, List.of("text"),
-            RedactionCertificate.class, List.of("documentFilename", "overturns[].spanText"));
+            RedactionCertificate.class, List.of("documentFilename", "overturns[].spanText", "overturns[].reason"),
+            NotificationSettings.class, List.of("password"),
+            AuditLog.class, List.of("details.reason"),
+            BackgroundJob.class, List.of("errorMessage", "failureMessages[]"),
+            DataImportLogEntry.class, List.of("message"));
 
     private PiiFieldEncryption() {}
 
@@ -176,6 +192,10 @@ public final class PiiFieldEncryption {
         if (entity instanceof DetectionRule r) return r.getId();
         if (entity instanceof RedactionCertificate rc) return rc.getId();
         if (entity instanceof GeneralSettings g) return g.getId();
+        if (entity instanceof NotificationSettings n) return n.getId();
+        if (entity instanceof AuditLog a) return a.getId();
+        if (entity instanceof BackgroundJob j) return j.getId();
+        if (entity instanceof DataImportLogEntry e) return e.getId();
         return "";
     }
 
@@ -210,6 +230,9 @@ public final class PiiFieldEncryption {
         if (i == path.length - 1) {
             if (value instanceof String text) {
                 node.put(key, cipher.encryptField(text));
+            } else if (each && value instanceof List<?> list) {
+                node.put(key, list.stream().map(v -> v instanceof String text ? cipher.encryptField(text) : v)
+                        .toList());
             }
         } else if (each && value instanceof List<?> list) {
             for (Object element : list) {
@@ -244,8 +267,23 @@ public final class PiiFieldEncryption {
             if (rc.getOverturns() != null) {
                 for (RedactionCertificate.OverturnEntry o : rc.getOverturns()) {
                     o.setSpanText(f.apply(o.getSpanText()));
+                    o.setReason(f.apply(o.getReason()));
                 }
             }
+        } else if (entity instanceof NotificationSettings n) {
+            n.setPassword(f.apply(n.getPassword()));
+        } else if (entity instanceof AuditLog a) {
+            // Only a string reason: free text a reviewer typed, such as why they overturned a decision.
+            if (a.getDetails() != null && a.getDetails().get("reason") instanceof String reason) {
+                a.getDetails().put("reason", f.apply(reason));
+            }
+        } else if (entity instanceof BackgroundJob j) {
+            j.setErrorMessage(f.apply(j.getErrorMessage()));
+            if (j.getFailureMessages() != null) {
+                j.setFailureMessages(new java.util.ArrayList<>(j.getFailureMessages().stream().map(f).toList()));
+            }
+        } else if (entity instanceof DataImportLogEntry e) {
+            e.setMessage(f.apply(e.getMessage()));
         }
     }
 
@@ -354,6 +392,46 @@ public final class PiiFieldEncryption {
     public static class RedactionCertificateCallbacks extends MongoCallbacks<RedactionCertificate> {
 
         public RedactionCertificateCallbacks(final SymmetricCipher cipher) {
+            super(cipher);
+        }
+    }
+
+    /** Lifecycle callbacks for the SMTP password in {@link NotificationSettings} (#77). */
+    @Component
+    @ConditionalOnProperty(prefix = "philter-workspace", name = "store", havingValue = "mongodb", matchIfMissing = true)
+    public static class NotificationSettingsCallbacks extends MongoCallbacks<NotificationSettings> {
+
+        public NotificationSettingsCallbacks(final SymmetricCipher cipher) {
+            super(cipher);
+        }
+    }
+
+    /** Lifecycle callbacks for an {@link AuditLog} entry's {@code reason} detail (#77). */
+    @Component
+    @ConditionalOnProperty(prefix = "philter-workspace", name = "store", havingValue = "mongodb", matchIfMissing = true)
+    public static class AuditLogCallbacks extends MongoCallbacks<AuditLog> {
+
+        public AuditLogCallbacks(final SymmetricCipher cipher) {
+            super(cipher);
+        }
+    }
+
+    /** Lifecycle callbacks for a {@link BackgroundJob}'s error and failure messages (#77). */
+    @Component
+    @ConditionalOnProperty(prefix = "philter-workspace", name = "store", havingValue = "mongodb", matchIfMissing = true)
+    public static class BackgroundJobCallbacks extends MongoCallbacks<BackgroundJob> {
+
+        public BackgroundJobCallbacks(final SymmetricCipher cipher) {
+            super(cipher);
+        }
+    }
+
+    /** Lifecycle callbacks for a {@link DataImportLogEntry}'s message (#77). */
+    @Component
+    @ConditionalOnProperty(prefix = "philter-workspace", name = "store", havingValue = "mongodb", matchIfMissing = true)
+    public static class DataImportLogEntryCallbacks extends MongoCallbacks<DataImportLogEntry> {
+
+        public DataImportLogEntryCallbacks(final SymmetricCipher cipher) {
             super(cipher);
         }
     }

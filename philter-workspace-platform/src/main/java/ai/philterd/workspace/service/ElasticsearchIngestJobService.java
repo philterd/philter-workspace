@@ -216,7 +216,7 @@ public class ElasticsearchIngestJobService {
             }
             finish(job, BackgroundJob.STATUS_COMPLETED, null);
         } catch (Exception e) {
-            log.warn("Job {} failed: {}", job.getId(), e.getMessage(), e);
+            log.warn("Job {} ({} from {}) failed: {}", job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
             finish(job, BackgroundJob.STATUS_FAILED,
                     "Could not run Elasticsearch ingest: " + e.getMessage());
         } finally {
@@ -278,7 +278,7 @@ public class ElasticsearchIngestJobService {
                 importLogService.success(job.getId(), filename, sourceDocIdValue);
             } catch (Exception e) {
                 final String reason = "Failed to enqueue hit " + hitId + ": " + e.getMessage();
-                log.warn("Job {}: {}", job.getId(), reason, e);
+                log.warn("Job {} ({} from {}): an item failed: {}", job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
                 bumpFailed(job, reason);
                 importLogService.failed(job.getId(), filename, sourceDocIdValue, e.getMessage());
             }

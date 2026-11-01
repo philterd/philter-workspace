@@ -276,7 +276,7 @@ public class RdbIngestJobService {
             password = source.getEncryptedPassword() == null || source.getEncryptedPassword().isEmpty()
                     ? null : cipher.decrypt(source.getEncryptedPassword());
         } catch (RuntimeException e) {
-            log.warn("Failed to decrypt stored connection details for job {}: {}", job.getId(), e.getMessage());
+            log.warn("Failed to decrypt stored connection details for job {}: {}", job.getId(), ErrorClasses.of(e));
             finish(job, BackgroundJob.STATUS_FAILED, "Could not decrypt stored connection details.");
             return;
         }
@@ -325,11 +325,11 @@ public class RdbIngestJobService {
             }
             finish(job, BackgroundJob.STATUS_COMPLETED, null);
         } catch (SQLException e) {
-            log.warn("Job {} failed: {}", job.getId(), e.getMessage(), e);
+            log.warn("Job {} ({} from {}) failed: {}", job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
             finish(job, BackgroundJob.STATUS_FAILED,
                     "Could not run RDB ingest: " + formatSqlError(e));
         } catch (Exception e) {
-            log.warn("Job {} failed: {}", job.getId(), e.getMessage(), e);
+            log.warn("Job {} ({} from {}) failed: {}", job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
             finish(job, BackgroundJob.STATUS_FAILED,
                     "Could not run RDB ingest: " + e.getMessage());
         }
@@ -410,7 +410,7 @@ public class RdbIngestJobService {
             } catch (Exception e) {
                 final String reason = "Failed to enqueue \"" + resolvedFilename + "\": "
                         + e.getMessage();
-                log.warn("Job {}: {}", job.getId(), reason, e);
+                log.warn("Job {} ({} from {}): an item failed: {}", job.getId(), job.getType(), job.getSourceName(), ErrorClasses.of(e));
                 bumpFailed(job, reason);
                 importLogService.failed(job.getId(), resolvedFilename, sourceDocId, e.getMessage());
             }

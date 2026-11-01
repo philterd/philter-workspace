@@ -146,9 +146,19 @@ class PiiFieldEncryptionTest {
         certificate.setDocumentFilename(secret);
         final RedactionCertificate.OverturnEntry overturn = new RedactionCertificate.OverturnEntry();
         overturn.setSpanText(secret);
+        overturn.setReason(secret);
         certificate.setOverturns(List.of(overturn, overturn));
+        final ai.philterd.workspace.model.NotificationSettings smtp = new ai.philterd.workspace.model.NotificationSettings();
+        smtp.setPassword(secret);
+        final ai.philterd.workspace.model.AuditLog entry = new ai.philterd.workspace.model.AuditLog();
+        entry.setDetails(new java.util.LinkedHashMap<>(java.util.Map.of("reason", secret, "overturn", true)));
+        final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
+        job.setErrorMessage(secret);
+        job.getFailureMessages().addAll(List.of(secret, secret));
+        final ai.philterd.workspace.model.DataImportLogEntry logEntry = new ai.philterd.workspace.model.DataImportLogEntry();
+        logEntry.setMessage(secret);
 
-        for (Object entity : List.of(d, span, settings, comment, rule, certificate)) {
+        for (Object entity : List.of(d, span, settings, comment, rule, certificate, smtp, entry, job, logEntry)) {
             final org.bson.Document stored = save(entity);
             assertFalse(stored.toJson().contains(secret), entity.getClass().getSimpleName() + ": " + stored.toJson());
             final Object loaded = load(entity.getClass(), stored);
@@ -156,6 +166,22 @@ class PiiFieldEncryptionTest {
             converter.write(loaded, again);
             assertTrue(again.toJson().contains(secret), "read back: " + again.toJson());
         }
+    }
+
+    @Test
+    void everyEncryptedTypeHasMongoCallbacks() {
+        // Without its callback class, MongoDB would write a type's PII fields in the clear.
+        final java.util.Set<Class<?>> covered = new java.util.HashSet<>();
+        for (Class<?> nested : PiiFieldEncryption.class.getDeclaredClasses()) {
+            if (nested.getSuperclass() == PiiFieldEncryption.MongoCallbacks.class) {
+                covered.add((Class<?>) ((java.lang.reflect.ParameterizedType) nested.getGenericSuperclass())
+                        .getActualTypeArguments()[0]);
+            }
+        }
+        for (Class<?> type : PiiFieldEncryption.STORED_PATHS.keySet()) {
+            assertTrue(covered.contains(type), type.getSimpleName() + " has no MongoDB callbacks");
+        }
+        assertTrue(covered.contains(PendingUpload.class));
     }
 
     // ---------- values that look encrypted (#74) ----------
