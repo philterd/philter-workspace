@@ -26,9 +26,18 @@ read and write the same `HttpSession`. Two consequences:
   any request.
 - A signed-in user keeps their session if a replica restarts.
 
-The connection is configured by `spring.data.redis.host` /
-`spring.data.redis.port`; docker-compose ships a `valkey` service on
-`6379`. Session timeout is `spring.session.timeout`, default 30 minutes.
+The connection is configured by `spring.data.redis.host`,
+`spring.data.redis.port`, and `spring.data.redis.password`. Both compose files
+start Valkey with a password (`VALKEY_PASSWORD`); the development stack
+publishes it on `127.0.0.1` only, and the production stack does not publish
+it. Session timeout is `spring.session.timeout`, default 30 minutes.
+
+Sessions are stored with Java serialization. Whoever can write to Valkey can
+forge a signed-in session for anyone, whatever the format, so the protection is
+access to Valkey, not the format: give it a password, keep it on a private
+network, and do not publish its port. A JSON format would remove Java
+deserialization from the risk but not the forgery, and would need every type
+kept in a session or flashed between requests to be allowlisted.
 
 ### Sign-in through Philter
 

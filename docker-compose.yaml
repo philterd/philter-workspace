@@ -1,3 +1,11 @@
+# The development stack, for trying Philter Workspace on your own machine. It is not for anything reachable
+# from a network: it loads demo data, serves plain HTTP, and its demo services (MinIO, PostgreSQL, MongoDB,
+# OpenSearch) run with fixed or no credentials. Every port is published on 127.0.0.1 only. For a deployment,
+# see docker-compose.prod.yaml.
+#
+# It needs these in .env, which quickstart.sh generates: PHILTER_WORKSPACE_CRYPTO_SECRET, VALKEY_PASSWORD,
+# PHILTER_BOOTSTRAP_API_KEY, and PHILTER_ENCRYPTION_KEY.
+
 services:
 
   philter-workspace:
@@ -6,8 +14,10 @@ services:
       dockerfile: Dockerfile
     container_name: philter-workspace-app
     ports:
-      # PHILTER_WORKSPACE_PORT changes the host port, for example when 8080 is taken.
-      - "${PHILTER_WORKSPACE_PORT:-8080}:8080"
+      # PHILTER_WORKSPACE_PORT changes the host port, for example when 8080 is taken. PHILTER_WORKSPACE_BIND
+      # (default 127.0.0.1) is the host IPv4 address, for this and the policy editor; 0.0.0.0 opens both to the
+      # network.
+      - "${PHILTER_WORKSPACE_BIND:-127.0.0.1}:${PHILTER_WORKSPACE_PORT:-8080}:8080"
     healthcheck:
       # Ready once GET /api/health answers 200 (it answers 503 while a dependency is down). The
       # start period covers a cold start, including creating the database schema and, here,
@@ -32,6 +42,7 @@ services:
       - SPRING_MONGODB_URI=mongodb://mongodb:27017/philter-workspace
       - SPRING_DATA_REDIS_HOST=valkey
       - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_PASSWORD=${VALKEY_PASSWORD:?Set VALKEY_PASSWORD in .env (quickstart.sh generates it)}
       # AES-256 key for at-rest credential encryption — base64 of exactly 32
       # random bytes. The application refuses to start without it. Generate one
       # and place it in .env (next to this file):
@@ -51,7 +62,7 @@ services:
       # flags it. A deployment uses a key for a user who is not an administrator (see
       # docker-compose.prod.yaml).
       - PHILTER_WORKSPACE_PHILTER_URL=http://philter:8080
-      - PHILTER_WORKSPACE_PHILTER_API_KEY=${PHILTER_BOOTSTRAP_API_KEY:-sk_devonlydevonlydevonlydevonly0000}
+      - PHILTER_WORKSPACE_PHILTER_API_KEY=${PHILTER_BOOTSTRAP_API_KEY:?Set PHILTER_BOOTSTRAP_API_KEY in .env (quickstart.sh generates it)}
 
     volumes:
       - ./sample-files:/app/sample-files:ro
@@ -97,9 +108,9 @@ services:
     environment:
       - STORAGE_TYPE=sqlite
       - SQLITE_PATH=/opt/philter/data/philter.db
-      # Development-only values. Set your own in .env for anything else.
-      - PHILTER_ENCRYPTION_KEY=${PHILTER_ENCRYPTION_KEY:-ZGV2LW9ubHktZGV2LW9ubHktZGV2LW9ubHktMDAwMDA=}
-      - PHILTER_BOOTSTRAP_API_KEY=${PHILTER_BOOTSTRAP_API_KEY:-sk_devonlydevonlydevonlydevonly0000}
+      # Philter reads the bootstrap key only on its first start, when it seeds it onto its admin user.
+      - PHILTER_ENCRYPTION_KEY=${PHILTER_ENCRYPTION_KEY:?Set PHILTER_ENCRYPTION_KEY in .env (quickstart.sh generates it)}
+      - PHILTER_BOOTSTRAP_API_KEY=${PHILTER_BOOTSTRAP_API_KEY:?Set PHILTER_BOOTSTRAP_API_KEY in .env (quickstart.sh generates it)}
       # People sign in to Philter Workspace through Philter.
       - PASSWORD_SIGN_IN_ENABLED=true
       - SSL_ENABLED=false
@@ -111,10 +122,15 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     container_name: philter-workspace-valkey
+    # Valkey holds the web sessions, so it always needs a password.
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD:?Set VALKEY_PASSWORD in .env (quickstart.sh generates it)}"]
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
     ports:
-      - "6379"
+      # For running the webapp from an IDE (DEVELOPER.md).
+      - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
     healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
+      test: ["CMD-SHELL", "valkey-cli -a \"$$VALKEY_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -127,7 +143,7 @@ services:
     container_name: philter-workspace-mongodb
     profiles: ["mongodb"]
     ports:
-      - "${MONGODB_PORT:-27017}:27017"
+      - "127.0.0.1:${MONGODB_PORT:-27017}:27017"
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.runCommand({ping:1})"]
       interval: 10s
@@ -141,7 +157,7 @@ services:
     image: philterd/philterd-redaction-policy-editor:latest
     container_name: philter-workspace-policy-editor
     ports:
-      - "${POLICY_EDITOR_PORT:-8081}:8080"
+      - "${PHILTER_WORKSPACE_BIND:-127.0.0.1}:${POLICY_EDITOR_PORT:-8081}:8080"
     networks:
       - philter-workspace
 
@@ -162,7 +178,7 @@ services:
         soft: -1
         hard: -1
     ports:
-      - "${OPENSEARCH_PORT:-9200}:9200"
+      - "127.0.0.1:${OPENSEARCH_PORT:-9200}:9200"
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:9200 >/dev/null || exit 1"]
       interval: 10s
@@ -187,8 +203,7 @@ services:
       memlock:
         soft: -1
         hard: -1
-    ports:
-      - "9200"
+    # Not published: only the demo Elasticsearch data source, inside the stack, uses it.
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:9200 >/dev/null || exit 1"]
       interval: 10s
@@ -207,8 +222,8 @@ services:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 10s
@@ -252,7 +267,7 @@ services:
       - POSTGRES_PASSWORD=philter_workspace_demo
       - POSTGRES_DB=philter_workspace_demo
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ./init-postgres.sql:/docker-entrypoint-initdb.d/01-documents.sql:ro
     healthcheck:

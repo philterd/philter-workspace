@@ -30,30 +30,41 @@ when it finishes. The first build takes several minutes. Set these to change wha
 | Variable                  | Default     | Effect                                                     |
 |---------------------------|-------------|------------------------------------------------------------|
 | `PHILTER_WORKSPACE_PORT`  | `8080`      | The host port Philter Workspace is published on.           |
+| `PHILTER_WORKSPACE_BIND`  | `127.0.0.1` | The host IPv4 address of Philter Workspace and the policy editor. `0.0.0.0` opens them to the network. |
 | `ADMIN_PASSWORD`          | generated   | `admin`'s first password, 16 characters to 72 bytes.       |
 | `PHILTER_WORKSPACE_STORE` | `sqlite`    | `mongodb` to use MongoDB instead.                          |
-| `OPENSEARCH_PORT`, `POLICY_EDITOR_PORT`, `MINIO_PORT`, `MINIO_CONSOLE_PORT`, `POSTGRES_PORT`, `MONGODB_PORT` | `9200`, `8081`, `9000`, `9001`, `5432`, `27017` | The host ports of the stack's other services. OpenSearch and MongoDB start only with their Compose profiles. |
+| `OPENSEARCH_PORT`, `POLICY_EDITOR_PORT`, `MINIO_PORT`, `MINIO_CONSOLE_PORT`, `POSTGRES_PORT`, `MONGODB_PORT`, `VALKEY_PORT` | `9200`, `8081`, `9000`, `9001`, `5432`, `27017`, `6379` | The host ports of the stack's other services. OpenSearch and MongoDB start only with their Compose profiles. |
 
 Before starting anything, it checks that every host port the stack publishes is free and
 names the variable that moves each one in use.
 
-It creates `.env` with a random `PHILTER_WORKSPACE_CRYPTO_SECRET` if there is none, and can
-be run again: it keeps an existing `.env` and never replaces a password `admin` already
-has. Stop the stack with `docker compose down`, adding `-v` to delete its data.
+It creates `.env` and generates the stack's keys into it: `PHILTER_WORKSPACE_CRYPTO_SECRET`,
+`VALKEY_PASSWORD`, `PHILTER_ENCRYPTION_KEY`, and `PHILTER_BOOTSTRAP_API_KEY`. It can be run
+again: it keeps the keys already in `.env` and never replaces a password `admin` already has.
+Stop the stack with `docker compose down`, adding `-v` to delete its data.
+
+The development stack is not for anything reachable from a network. It loads demo data,
+serves plain HTTP, and its demo services (MinIO, PostgreSQL, MongoDB, OpenSearch) run with
+fixed or no credentials, so every port is published on `127.0.0.1` only. On a remote machine,
+use an SSH tunnel (`ssh -L 8080:localhost:8080 <host>`). For a deployment, see
+`docker-compose.prod.yaml`.
 
 ### By hand
 
-**1. Create your `.env` file with a secret key.**
-
-Generate a cryptographically random 256-bit key:
+**1. Create your `.env` file with the stack's keys.**
 
 ```shell
 echo "PHILTER_WORKSPACE_CRYPTO_SECRET=$(openssl rand -base64 32)" > .env
+echo "VALKEY_PASSWORD=$(openssl rand -hex 24)" >> .env
+echo "PHILTER_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
+echo "PHILTER_BOOTSTRAP_API_KEY=sk_$(openssl rand -hex 16)" >> .env
 ```
 
 `PHILTER_WORKSPACE_CRYPTO_SECRET` must be a base64-encoded 32-byte value. Philter Workspace
 refuses to start if it is missing, not valid base64, or does not decode to
-exactly 32 bytes. `.env.example` lists the other settings `.env` can hold.
+exactly 32 bytes. Compose refuses to start while any of the four is missing. Philter reads
+`PHILTER_BOOTSTRAP_API_KEY` only on its first start, so keep it. `.env.example` lists the
+other settings `.env` can hold.
 
 **2. Build the Docker image.**
 
@@ -67,14 +78,14 @@ docker compose build
 docker compose up
 ```
 
-Philter Workspace will be available at <http://localhost:8080>. People sign in with
+Philter Workspace will be available at <http://localhost:8080>, on this machine only. People sign in with
 their Philter username and password; to sign in as Philter's first
 administrator, `admin`, give it a password as
 [First sign-in](https://philterd.github.io/philter-workspace/security/#first-sign-in) shows.
 
 Philter Workspace sends documents to the Philter that `docker-compose.yaml` also starts,
-set by `PHILTER_WORKSPACE_PHILTER_URL` and `PHILTER_WORKSPACE_PHILTER_API_KEY`. Its keys there are
-for development only; for a deployment, see `docker-compose.prod.yaml` and
+set by `PHILTER_WORKSPACE_PHILTER_URL` and `PHILTER_WORKSPACE_PHILTER_API_KEY`. That key is
+Philter's bootstrap key, which belongs to an administrator; for a deployment, see `docker-compose.prod.yaml` and
 [Configure Philter](https://philterd.github.io/philter-workspace/workflow/#1-configure-philter).
 
 ## Building the Docker image

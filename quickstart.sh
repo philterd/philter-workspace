@@ -2,20 +2,25 @@
 #
 # Builds and starts the development stack in docker-compose.yaml, waits until Philter Workspace is
 # healthy, and gives Philter's admin user its first password, so you can sign in straight away.
-# For development only: it uses the compose file's development keys. See docker-compose.prod.yaml
-# for a deployment.
+#
+# The development stack is not for anything reachable from a network. It loads demo data, serves
+# plain HTTP, and its demo services run with fixed or no credentials, so it publishes every port on
+# 127.0.0.1 only. See docker-compose.prod.yaml for a deployment.
 #
 # Usage:
 #   ./quickstart.sh
 #
 # Environment:
 #   PHILTER_WORKSPACE_PORT   Host port for Philter Workspace (default 8080).
+#   PHILTER_WORKSPACE_BIND   Host IPv4 address for Philter Workspace and the policy editor
+#                            (default 127.0.0.1). 0.0.0.0 opens them to the network.
 #   ADMIN_PASSWORD           admin's first password, 16 to 72 characters. Generated when unset.
 #   PHILTER_WORKSPACE_STORE  sqlite (default) or mongodb.
-#   OPENSEARCH_PORT, POLICY_EDITOR_PORT, MINIO_PORT, MINIO_CONSOLE_PORT, POSTGRES_PORT, MONGODB_PORT
+#   OPENSEARCH_PORT, POLICY_EDITOR_PORT, MINIO_PORT, MINIO_CONSOLE_PORT, POSTGRES_PORT, MONGODB_PORT,
+#   VALKEY_PORT
 #                            Host ports of the other services, when their defaults are taken.
 #
-# Safe to run again: it keeps an existing .env and never replaces a password admin already has.
+# Safe to run again: it keeps the keys already in .env and never replaces a password admin already has.
 
 set -euo pipefail
 
@@ -36,24 +41,39 @@ for tool in docker openssl; do
 done
 docker compose version > /dev/null 2>&1 || fail "Docker Compose v2 (docker compose) is required."
 
-# --- .env and the encryption key ---------------------------------------------------------------
+# --- .env and its keys -------------------------------------------------------------------------
 
 if [ ! -f .env ]; then
     cp .env.example .env
     echo "Created .env from .env.example."
 fi
-if ! grep -q '^PHILTER_WORKSPACE_CRYPTO_SECRET=' .env \
-        || grep -q '^PHILTER_WORKSPACE_CRYPTO_SECRET=replace-me' .env; then
-    secret="$(openssl rand -base64 32)"
-    grep -v '^PHILTER_WORKSPACE_CRYPTO_SECRET=' .env > .env.tmp || true
-    printf 'PHILTER_WORKSPACE_CRYPTO_SECRET=%s\n' "$secret" >> .env.tmp
-    mv .env.tmp .env
-    echo "Generated PHILTER_WORKSPACE_CRYPTO_SECRET in .env."
-fi
 
-# The bootstrap key compose gives Philter: from .env if set there, else compose's development default.
+# Sets $1 in .env to the output of the rest of the arguments, unless .env already gives it a value
+# other than the .env.example placeholder.
+generate() {
+    local name="$1"
+    shift
+    if grep -q "^${name}=." .env && ! grep -q "^${name}=replace-me" .env; then
+        return
+    fi
+    local value
+    value="$("$@")"
+    grep -v "^${name}=" .env > .env.tmp || true
+    printf '%s=%s\n' "$name" "$value" >> .env.tmp
+    mv .env.tmp .env
+    echo "Generated ${name} in .env."
+}
+bootstrap_key() {
+    printf 'sk_%s' "$(openssl rand -hex 16)"
+}
+generate PHILTER_WORKSPACE_CRYPTO_SECRET openssl rand -base64 32
+generate VALKEY_PASSWORD openssl rand -hex 24
+generate PHILTER_ENCRYPTION_KEY openssl rand -base64 32
+# Philter seeds this key onto its admin user on its first start only, so it is never changed afterwards.
+generate PHILTER_BOOTSTRAP_API_KEY bootstrap_key
+chmod 600 .env
+
 BOOTSTRAP_KEY="$(sed -n 's/^PHILTER_BOOTSTRAP_API_KEY=//p' .env | tail -n 1)"
-BOOTSTRAP_KEY="${BOOTSTRAP_KEY:-sk_devonlydevonlydevonlydevonly0000}"
 
 # --- Host ports --------------------------------------------------------------------------------
 
@@ -67,6 +87,7 @@ export PHILTER_WORKSPACE_PORT="$PORT" PHILTER_WORKSPACE_STORE="$STORE"
 port_variable() {
     case "$1" in
         philter-workspace) echo PHILTER_WORKSPACE_PORT ;;
+        valkey) echo VALKEY_PORT ;;
         policy-editor) echo POLICY_EDITOR_PORT ;;
         opensearch) echo OPENSEARCH_PORT ;;
         postgres) echo POSTGRES_PORT ;;
@@ -100,6 +121,13 @@ if [ "${#conflicts[@]}" -gt 0 ]; then
 fi
 
 # --- Build and start ---------------------------------------------------------------------------
+
+BIND="${PHILTER_WORKSPACE_BIND:-127.0.0.1}"
+if [ "$BIND" != "127.0.0.1" ]; then
+    echo "WARNING: PHILTER_WORKSPACE_BIND=${BIND} publishes Philter Workspace and the policy editor beyond this" >&2
+    echo "machine. The development stack loads demo data and serves plain HTTP; it is not for anything" >&2
+    echo "reachable from a network. See docker-compose.prod.yaml for a deployment." >&2
+fi
 
 echo "Building and starting the stack. The first build takes several minutes."
 docker compose "${profile[@]}" up -d --build

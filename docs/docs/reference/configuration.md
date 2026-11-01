@@ -126,12 +126,14 @@ spring.data.redis.port=6379
 
 Session state lives in [Valkey](https://valkey.io/) (a Redis
 protocol-compatible server) so user sessions are shared across application
-replicas. The bundled `docker-compose.yaml` overrides
-`spring.data.redis.host` via environment variable so the app talks to the
-Valkey container.
+replicas. The bundled compose files set `SPRING_DATA_REDIS_HOST` and
+`SPRING_DATA_REDIS_PASSWORD` so the app talks to the Valkey container, which
+requires the password in `VALKEY_PASSWORD`.
 
 Sessions always use Valkey, so a local run outside Docker needs a Valkey (or
-Redis) server, for example `docker compose up valkey`.
+Redis) server, for example `docker compose up valkey`, which publishes it on
+`127.0.0.1:6379` (`VALKEY_PORT` moves it). Set `SPRING_DATA_REDIS_PASSWORD` to
+the `VALKEY_PASSWORD` in `.env`. See [Session storage](../security.md#session-storage).
 
 `spring.session.timeout` controls how long an idle session stays valid
 before the user is logged out.

@@ -42,13 +42,21 @@ configured on the same page. See [Full text search](admin/full-text-search.md).
 
 Philter Workspace creates no accounts: people sign in with their Philter username and password, and the
 first administrator is Philter's `admin`. Give it a password with `PHILTER_BOOTSTRAP_API_KEY`, then
-sign in at `/login` as `admin`; see [First sign-in](security.md#first-sign-in). The shipped
-`docker-compose.yaml` runs a Philter with development-only keys.
+sign in at `/login` as `admin`; see [First sign-in](security.md#first-sign-in).
 
-For development, `quickstart.sh` in the repository root does both: it starts the
-`docker-compose.yaml` stack, waits until Philter Workspace is healthy, and gives `admin` its
-first password, printing it when it finishes. `PHILTER_WORKSPACE_PORT` changes the host port
-from 8080, and `ADMIN_PASSWORD` sets the password instead of generating one.
+For development, `quickstart.sh` in the repository root does both: it generates the stack's
+keys into `.env` (Philter Workspace's encryption key, the Valkey password, and Philter's
+encryption and bootstrap keys), starts the `docker-compose.yaml` stack, waits until Philter
+Workspace is healthy, and gives `admin` its first password, printing it when it finishes.
+`PHILTER_WORKSPACE_PORT` changes the host port from 8080, and `ADMIN_PASSWORD` sets the
+password instead of generating one.
+
+The development stack is not for anything reachable from a network. It loads demo data,
+serves plain HTTP, and its demo services (MinIO, PostgreSQL, MongoDB, OpenSearch) run with
+fixed or no credentials, so it publishes every port on `127.0.0.1` only. Reach it on a remote
+machine through an SSH tunnel, for example `ssh -L 8080:localhost:8080 <host>`.
+`PHILTER_WORKSPACE_BIND=0.0.0.0` opens Philter Workspace and the policy editor to the network
+instead; `quickstart.sh` warns when it is set. For a deployment, use `docker-compose.prod.yaml`.
 
 On the first start with **empty `batches` / `documents` / `spans` collections and demo data
 enabled**, Philter Workspace loads any files under the configured demo directory into a sample batch and runs

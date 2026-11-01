@@ -58,7 +58,10 @@ image automatically: run `push-image.sh` yourself from a machine holding the
 Docker Hub credential. Set `ARCHES=amd64` to build just one architecture.
 
 Running the webapp from the IDE needs Valkey reachable, plus MongoDB unless
-you set `PHILTER_WORKSPACE_STORE=sqlite`:
+you set `PHILTER_WORKSPACE_STORE=sqlite`. Compose reads `.env` (run
+`./quickstart.sh` once, or create it as the README shows), publishes both on
+`127.0.0.1`, and starts Valkey with a password, so set
+`SPRING_DATA_REDIS_PASSWORD` to the `VALKEY_PASSWORD` in `.env`:
 
 ```sh
 docker compose -f docker-compose.yaml up -d valkey
@@ -69,7 +72,7 @@ docker compose -f docker-compose.yaml --profile mongodb up -d mongodb valkey
 
 Defaults in `philter-workspace-webapp/src/main/resources/application.properties`
 point at `localhost`; the only env vars worth knowing about are
-`PHILTER_WORKSPACE_STORE`, `SPRING_MONGODB_URI`, `SPRING_DATA_REDIS_HOST`/`_PORT`, and
+`PHILTER_WORKSPACE_STORE`, `SPRING_MONGODB_URI`, `SPRING_DATA_REDIS_HOST`/`_PORT`/`_PASSWORD`, and
 **`philter-workspace.crypto.secret`** (now required: base64 of 32 random bytes,
 e.g. `openssl rand -base64 32`; Philter Workspace refuses to start if it isn't
 set or has the wrong shape). The OpenSearch endpoint used for
