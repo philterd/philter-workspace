@@ -25,7 +25,7 @@ import static org.mockito.Mockito.mock;
 
 class DestinationWriterTest {
 
-    private final DestinationWriter writer = new DestinationWriter(mock(SymmetricCipher.class));
+    private final DestinationWriter writer = new DestinationWriter(mock(SymmetricCipher.class), new LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
 
     private static LocalDirectoryDestination dest(final Path dir) {
         final LocalDirectoryDestination d = new LocalDirectoryDestination();
@@ -80,7 +80,7 @@ class DestinationWriterTest {
 
     @Test
     void aWriteReplacesTheFileWholeAndLeavesNoTemporaryFileBehind(@TempDir final Path dir) throws Exception {
-        final DestinationWriter writer = new DestinationWriter(org.mockito.Mockito.mock(SymmetricCipher.class));
+        final DestinationWriter writer = new DestinationWriter(org.mockito.Mockito.mock(SymmetricCipher.class), new LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
         final ai.philterd.workspace.model.LocalDirectoryDestination d = new ai.philterd.workspace.model.LocalDirectoryDestination();
         d.setDirectoryPath(dir.toString());
 
@@ -95,5 +95,26 @@ class DestinationWriterTest {
         assertEquals(java.nio.file.Files.getPosixFilePermissions(direct),
                 java.nio.file.Files.getPosixFilePermissions(dir.resolve("d1/out.txt")),
                 "the same permissions as a direct write, not narrowed to the owner");
+    }
+
+    @Test
+    void aDestinationOutsideTheAllowedRootsOrASubfolderLinkedOutOfItIsRefused(@TempDir final Path tmp) throws Exception {
+        // #72: the destination must be under an allowed root, and a write may not follow a link out of it.
+        final Path root = java.nio.file.Files.createDirectory(tmp.resolve("root"));
+        final Path outside = java.nio.file.Files.createDirectory(tmp.resolve("outside"));
+        final DestinationWriter confined = new DestinationWriter(mock(SymmetricCipher.class),
+                new LocalDirectoryRoots(root.toString()));
+
+        final DestinationWriter.Result elsewhere = confined.writeLocal(dest(outside), "a.txt", "x".getBytes());
+        org.junit.jupiter.api.Assertions.assertFalse(elsewhere.isOk());
+        org.junit.jupiter.api.Assertions.assertEquals(LocalDirectoryRoots.NOT_ALLOWED, elsewhere.getError());
+
+        java.nio.file.Files.createSymbolicLink(root.resolve("batch"), outside);
+        final DestinationWriter.Result linked = confined.writeLocal(dest(root), "batch/a.txt", "x".getBytes());
+        org.junit.jupiter.api.Assertions.assertFalse(linked.isOk());
+        org.junit.jupiter.api.Assertions.assertFalse(java.nio.file.Files.exists(outside.resolve("a.txt")),
+                "nothing is written through the link");
+
+        org.junit.jupiter.api.Assertions.assertTrue(confined.writeLocal(dest(root), "ok/a.txt", "x".getBytes()).isOk());
     }
 }

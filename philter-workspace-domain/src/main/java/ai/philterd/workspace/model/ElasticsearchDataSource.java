@@ -16,7 +16,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 @Document(collection = "elasticsearch_data_sources")
-public class ElasticsearchDataSource {
+public class ElasticsearchDataSource implements GroupScopedSource {
 
     @Id
     private String id;
@@ -84,4 +84,21 @@ public class ElasticsearchDataSource {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(final LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    /** The groups this source is available to (#72). With none, and not {@link #allGroups}, administrators only. */
+    private java.util.List<String> groupIds = new java.util.ArrayList<>();
+    /** Whether this source is available to every group (#72). */
+    private boolean allGroups;
+
+    @Override
+    public java.util.List<String> getGroupIds() { return groupIds; }
+    @Override
+    public void setGroupIds(final java.util.List<String> groupIds) {
+        this.groupIds = groupIds == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(groupIds);
+    }
+
+    @Override
+    public boolean isAllGroups() { return allGroups; }
+    @Override
+    public void setAllGroups(final boolean allGroups) { this.allGroups = allGroups; }
 }

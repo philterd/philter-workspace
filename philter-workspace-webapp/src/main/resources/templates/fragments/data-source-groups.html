@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!--
+  ~ Copyright 2026 Philterd, LLC.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~     http://www.apache.org/licenses/LICENSE-2.0
+  -->
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<body>
+<!-- Which groups a data source is available to (#72), and, for an administrator, a form to change it. -->
+<div th:fragment="groups(type, id)" th:with="scope=${sourceScopes[type + ':' + id]}"
+     class="mt-1 text-xs font-normal text-gray-600 whitespace-normal">
+    <span th:text="${scopeLabels[type + ':' + id]}">Administrators only</span>
+    <details sec:authorize="hasRole('ADMIN')" class="inline ml-1">
+        <summary class="inline cursor-pointer text-brand-600 hover:text-brand-800">Groups</summary>
+        <form th:action="@{/admin/data-sources/groups/{type}/{id}(type=${type},id=${id})}" method="post"
+              class="mt-2 p-3 bg-white border border-gray-200 rounded-lg shadow-sm space-y-1">
+            <label class="flex items-center gap-2">
+                <input type="checkbox" name="allGroups" value="true" th:checked="${scope.allGroups}">
+                All groups
+            </label>
+            <label th:each="g : ${groups}" class="flex items-center gap-2">
+                <input type="checkbox" name="groupIds" th:value="${g.id}"
+                       th:checked="${scope.groupIds.contains(g.id)}">
+                <span th:text="${g.name}">Group</span>
+            </label>
+            <p class="text-gray-500">With none checked, only administrators can import from it. Team leads of a
+                checked group can import into that group's batches.</p>
+            <button type="submit"
+                    class="px-3 py-1 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded">Save</button>
+        </form>
+    </details>
+</div>
+</body>
+</html>

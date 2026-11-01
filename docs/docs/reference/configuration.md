@@ -383,6 +383,12 @@ and the reason, never its body. A delivery Philter retries is recognized by its
 `X-Philter-Delivery-Id` and acknowledged without being handled again. Events Philter
 Workspace does not handle are acknowledged, as Philter asks.
 
+## Local Directory roots
+
+| Property | Environment variable | Purpose |
+| --- | --- | --- |
+| `philter-workspace.local-directory.allowed-roots` | `PHILTER_WORKSPACE_LOCAL_DIRECTORY_ALLOWED_ROOTS` | Comma-separated folders that Local Directory data sources and destinations must be under, compared by real path. Unset, Local Directory is refused. See [Data sources](../admin/data-sources.md#local-directory). |
+
 ## Data-source allow-list
 
 ```

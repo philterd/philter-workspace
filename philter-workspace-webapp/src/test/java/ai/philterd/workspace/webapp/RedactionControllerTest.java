@@ -324,36 +324,110 @@ public class RedactionControllerTest {
                 .start(any(), any(), org.mockito.ArgumentMatchers.anyInt(), any());
     }
 
-    /** A reviewer in the batch's group is allowed through to the job service. */
-    @Test
-    public void ingestFromSourceAllowedForGroupMember() throws Exception {
+    private static ai.philterd.workspace.model.OpenSearchDataSource source(final String id, final String... groupIds) {
+        final ai.philterd.workspace.model.OpenSearchDataSource source = new ai.philterd.workspace.model.OpenSearchDataSource();
+        source.setId(id);
+        source.setName(id);
+        source.setGroupIds(java.util.List.of(groupIds));
+        return source;
+    }
+
+    private org.springframework.test.web.servlet.ResultActions importAs(final String role, final String dataSourceId)
+            throws Exception {
+        return mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/ingest-from-source")
+                .param("sourceType", "opensearch")
+                .param("batchId", "b1")
+                .param("dataSourceId", dataSourceId)
+                .with(csrf()).with(signedIn("user", role)));
+    }
+
+    private void myBatch() {
         final Batch batch = new Batch();
         batch.setId("b1");
         batch.setName("Mine");
         batch.setGroupId("g-mine");
         when(batchRepository.findById("b1")).thenReturn(Optional.of(batch));
         when(userGroupsService.groupIdsForEmail(any())).thenReturn(java.util.Set.of("g-mine"));
+    }
 
+    /** A team lead of the batch's group may import from a source available to that group (#72). */
+    @Test
+    public void ingestFromSourceAllowedForTeamLeadFromASourceOfTheirGroup() throws Exception {
+        myBatch();
+        when(userGroupsService.leadGroupIdsForEmail(any())).thenReturn(java.util.Set.of("g-mine"));
+        when(openSearchDataSourceRepository.findById("src-1")).thenReturn(Optional.of(source("src-1", "g-mine")));
         final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
         job.setStatus(ai.philterd.workspace.model.BackgroundJob.STATUS_PENDING);
         when(openSearchIngestJobService.start(any(), any(), org.mockito.ArgumentMatchers.anyInt(), any()))
                 .thenReturn(job);
 
-        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .post("/ingest-from-source")
-                        .param("sourceType", "opensearch")
-                        .param("batchId", "b1")
-                        .param("dataSourceId", "src-1")
-                        .with(csrf()).with(signedIn("user", "USER")))
+        importAs("USER", "src-1")
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/jobs"))
                 .andExpect(flash().attributeExists("success"));
+    }
 
-        org.mockito.Mockito.verify(openSearchIngestJobService)
-                .start(org.mockito.ArgumentMatchers.eq("src-1"),
-                        org.mockito.ArgumentMatchers.eq("b1"),
-                        org.mockito.ArgumentMatchers.anyInt(),
-                        any());
+    /**
+     * #72: a reviewer who is not a team lead, a team lead importing from another group's source, and a source that
+     * does not exist all get the same refusal, and each is audited; no job is started.
+     */
+    @Test
+    public void ingestFromSourceRefusedForAnotherGroupsSourceOrAReviewerTheSameWayAsAMissingSource() throws Exception {
+        myBatch();
+        when(openSearchDataSourceRepository.findById("theirs")).thenReturn(Optional.of(source("theirs", "g-other")));
+        when(openSearchDataSourceRepository.findById("mine")).thenReturn(Optional.of(source("mine", "g-mine")));
+
+        final java.util.List<String> errors = new java.util.ArrayList<>();
+        // A reviewer of the group, not its team lead, on the group's own source.
+        when(userGroupsService.leadGroupIdsForEmail(any())).thenReturn(java.util.Set.of());
+        errors.add((String) importAs("USER", "mine").andExpect(redirectedUrl("/upload"))
+                .andReturn().getFlashMap().get("error"));
+        // The group's team lead, on another group's source, and on a source that does not exist.
+        when(userGroupsService.leadGroupIdsForEmail(any())).thenReturn(java.util.Set.of("g-mine"));
+        for (String id : java.util.List.of("theirs", "missing")) {
+            errors.add((String) importAs("USER", id).andExpect(redirectedUrl("/upload"))
+                    .andReturn().getFlashMap().get("error"));
+        }
+
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.Set.of(
+                "Selected data source is not available for this batch."), new java.util.HashSet<>(errors));
+        org.mockito.Mockito.verify(openSearchIngestJobService, org.mockito.Mockito.never())
+                .start(any(), any(), org.mockito.ArgumentMatchers.anyInt(), any());
+        org.mockito.Mockito.verify(auditLogRepository, org.mockito.Mockito.times(3)).save(
+                org.mockito.ArgumentMatchers.argThat((ai.philterd.workspace.model.AuditLog entry) ->
+                        "DATA_SOURCE_IMPORT_REFUSED".equals(entry.getAction())));
+    }
+
+    /** #72: the import tabs list only sources a team lead may use with a batch they lead, and none to a reviewer. */
+    @Test
+    public void theImportTabsListOnlyTheGroupsSourcesToItsTeamLead() throws Exception {
+        final Batch batch = new Batch();
+        batch.setId("b1");
+        batch.setName("Mine");
+        batch.setGroupId("g-mine");
+        when(batchRepository.findAll(org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(batch)));
+        when(userGroupsService.groupIdsForEmail(any())).thenReturn(java.util.Set.of("g-mine"));
+        final ai.philterd.workspace.model.OpenSearchDataSource mine = source("mine-source", "g-mine");
+        mine.setEndpoint("https://mine.example.com");
+        final ai.philterd.workspace.model.OpenSearchDataSource theirs = source("their-source", "g-other");
+        theirs.setEndpoint("https://theirs.example.com");
+        when(openSearchDataSourceRepository.findAll(
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(mine, theirs)));
+
+        when(userGroupsService.leadGroupIdsForEmail(any())).thenReturn(java.util.Set.of("g-mine"));
+        final String lead = mockMvc.perform(get("/upload").with(signedIn("user", "USER")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertTrue(lead.contains("mine-source"), "their own group's source");
+        org.junit.jupiter.api.Assertions.assertFalse(lead.contains("their-source"), "not another group's");
+
+        when(userGroupsService.leadGroupIdsForEmail(any())).thenReturn(java.util.Set.of());
+        final String reviewer = mockMvc.perform(get("/upload").with(signedIn("user", "USER")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertFalse(reviewer.contains("mine-source") || reviewer.contains("their-source"));
+        org.junit.jupiter.api.Assertions.assertTrue(reviewer.contains("No OpenSearch data sources are available to you."));
     }
 
     /** An admin can start an ingest into any batch. */
@@ -364,6 +438,8 @@ public class RedactionControllerTest {
         batch.setName("Anyone's batch");
         batch.setGroupId("g-someone");
         when(batchRepository.findById("b1")).thenReturn(Optional.of(batch));
+        // A source with no groups is for administrators only, and an administrator may use it.
+        when(openSearchDataSourceRepository.findById("src-1")).thenReturn(Optional.of(source("src-1")));
 
         final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
         job.setStatus(ai.philterd.workspace.model.BackgroundJob.STATUS_PENDING);
@@ -413,6 +489,9 @@ public class RedactionControllerTest {
         batch.setName("Q4 docs");
         batch.setGroupId("g1");
         when(batchRepository.findById("b1")).thenReturn(Optional.of(batch));
+        final ai.philterd.workspace.model.RelationalDbDataSource rdbSource = new ai.philterd.workspace.model.RelationalDbDataSource();
+        rdbSource.setId("rdb-1");
+        when(relationalDbDataSourceRepository.findById("rdb-1")).thenReturn(Optional.of(rdbSource));
 
         final ai.philterd.workspace.model.BackgroundJob job = new ai.philterd.workspace.model.BackgroundJob();
         job.setStatus(ai.philterd.workspace.model.BackgroundJob.STATUS_PENDING);

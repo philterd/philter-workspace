@@ -69,6 +69,9 @@ public class LocalDirectoryIngestJobService {
     private final AuditLogService auditLogService;
     private final DataImportLogService importLogService;
 
+    private final LocalDirectoryRoots roots;
+    private final GeneralSettingsService generalSettingsService;
+
     public LocalDirectoryIngestJobService(final BackgroundJobRepository jobRepository,
                                           final LocalDirectoryDataSourceRepository dataSourceRepository,
                                           final BatchRepository batchRepository,
@@ -76,7 +79,11 @@ public class LocalDirectoryIngestJobService {
                                           final IngestQueueService ingestQueueService,
                                           final InboxService inboxService,
                                           final AuditLogService auditLogService,
-                                          final DataImportLogService importLogService) {
+                                          final DataImportLogService importLogService,
+                                          final LocalDirectoryRoots roots,
+                                          final GeneralSettingsService generalSettingsService) {
+        this.roots = roots;
+        this.generalSettingsService = generalSettingsService;
         this.jobRepository = jobRepository;
         this.dataSourceRepository = dataSourceRepository;
         this.batchRepository = batchRepository;
@@ -204,6 +211,8 @@ public class LocalDirectoryIngestJobService {
         job.setTotalDocuments(candidates.size());
         jobRepository.save(job);
 
+        // The upload limit applies to each file read (#72).
+        final long maxBytes = generalSettingsService.load().getMaxUploadFileSizeBytes();
         try {
             for (Path file : candidates) {
                 final String relative = root.relativize(file).toString();
@@ -217,11 +226,23 @@ public class LocalDirectoryIngestJobService {
                 }
 
                 try {
+                    // #72: read through the real path, which must stay under an allowed root, so a symbolic link
+                    // cannot lead out of it; and no larger than an upload may be.
+                    final Path real = file.toRealPath();
+                    final String refusal = refusal(real, maxBytes);
+                    if (refusal != null) {
+                        bumpFailed(job, refusal + ": \"" + relative + "\"");
+                        importLogService.failed(job.getId(), filename, relative, refusal);
+                        continue;
+                    }
                     // The file's case metadata (#16), from its sidecar when it has one.
                     final Path sidecar = file.resolveSibling(CaseMetadataSidecar.sidecarFor(filename));
-                    final ai.philterd.workspace.model.CaseMetadata caseMetadata = Files.isRegularFile(sidecar)
-                            ? CaseMetadataSidecar.parse(Files.readAllBytes(sidecar)) : null;
-                    final byte[] bytes = Files.readAllBytes(file);
+                    final Path realSidecar = Files.isRegularFile(sidecar) ? sidecar.toRealPath() : null;
+                    final ai.philterd.workspace.model.CaseMetadata caseMetadata =
+                            realSidecar != null && refusal(realSidecar, maxBytes) == null
+                                    ? CaseMetadataSidecar.parse(Files.readAllBytes(realSidecar)) : null;
+                    // Read through the real path that was checked.
+                    final byte[] bytes = Files.readAllBytes(real);
                     final boolean isPdf = isPdf(filename);
                     final ai.philterd.workspace.model.Document doc;
                     if (isPdf) {
@@ -262,7 +283,7 @@ public class LocalDirectoryIngestJobService {
      * a directory, isn't readable). Surfaced both at start time and on the dispatcher run
      * so a directory that disappears between the two still reports a clean error.
      */
-    private static String validateDirectory(final String configuredPath) {
+    private String validateDirectory(final String configuredPath) {
         if (configuredPath == null || configuredPath.isBlank()) {
             return "Data source has no directory path configured.";
         }
@@ -281,6 +302,10 @@ public class LocalDirectoryIngestJobService {
         if (!Files.isReadable(path)) {
             return "Directory is not readable by the application user: " + path;
         }
+        // #72: only under an administrator-configured root, checked on the real path.
+        if (roots.confine(configuredPath) == null) {
+            return LocalDirectoryRoots.NOT_ALLOWED;
+        }
         return null;
     }
 
@@ -296,6 +321,20 @@ public class LocalDirectoryIngestJobService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Why the file at {@code real}, already resolved with {@link Path#toRealPath}, is not read, or null: it is outside
+     * the allowed roots, or larger than {@code maxBytes} (no limit when not positive).
+     */
+    private String refusal(final Path real, final long maxBytes) throws IOException {
+        if (!roots.contains(real)) {
+            return "Outside the allowed root";
+        }
+        if (maxBytes > 0 && Files.size(real) > maxBytes) {
+            return "Larger than the " + maxBytes + "-byte upload limit";
+        }
+        return null;
     }
 
     private static List<Path> collectCandidates(final Path root, final PathMatcher matcher)

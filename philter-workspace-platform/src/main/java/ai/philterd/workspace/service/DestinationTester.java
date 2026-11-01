@@ -44,6 +44,12 @@ public class DestinationTester {
 
     private static final Region DEFAULT_S3_REGION = Region.US_EAST_1;
 
+    private final LocalDirectoryRoots roots;
+
+    public DestinationTester(final LocalDirectoryRoots roots) {
+        this.roots = roots;
+    }
+
     public TestResult testLocalDirectory(final String directoryPath) {
         if (directoryPath == null || directoryPath.isBlank()) {
             return TestResult.failure("Directory path is required.");
@@ -54,6 +60,10 @@ public class DestinationTester {
         }
         if (!Files.isDirectory(dir)) {
             return TestResult.failure("Path is not a directory: " + dir);
+        }
+        // #72: only under an administrator-configured root, by its real path.
+        if (roots.confine(directoryPath) == null) {
+            return TestResult.failure(LocalDirectoryRoots.NOT_ALLOWED);
         }
         final String filename = "philter-workspace-test-" + Instant.now().toEpochMilli() + ".txt";
         final Path target = dir.resolve(filename);

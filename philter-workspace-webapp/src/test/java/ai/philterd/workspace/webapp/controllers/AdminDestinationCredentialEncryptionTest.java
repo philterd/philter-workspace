@@ -71,7 +71,7 @@ class AdminDestinationCredentialEncryptionTest {
                 localRepository, s3Repository,
                 auditLogService, cipher,
                 mock(DestinationTester.class),
-                mock(ai.philterd.workspace.repository.BatchRepository.class));
+                mock(ai.philterd.workspace.repository.BatchRepository.class), new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
     }
 
     private static RedirectAttributes flash() { return new RedirectAttributesModelMap(); }

@@ -52,6 +52,10 @@ import static org.mockito.Mockito.when;
  */
 class AdminDestinationControllerTest {
 
+    /** An existing folder under the allowed root these tests use: Local Directory paths must exist under one (#72). */
+    private static final String TMP = System.getProperty("java.io.tmpdir");
+
+
     private LocalDirectoryDestinationRepository localRepository;
     private S3DestinationRepository s3Repository;
     private AuditLogService auditLogService;
@@ -77,7 +81,7 @@ class AdminDestinationControllerTest {
                 .thenReturn(new PageImpl<>(List.of()));
 
         controller = new AdminDestinationController(
-                localRepository, s3Repository, auditLogService, cipher, destinationTester, batchRepository);
+                localRepository, s3Repository, auditLogService, cipher, destinationTester, batchRepository, new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
     }
 
     private static RedirectAttributes flash() { return new RedirectAttributesModelMap(); }
@@ -128,7 +132,7 @@ class AdminDestinationControllerTest {
         when(localRepository.findFirstByNameIgnoreCase("archive")).thenReturn(Optional.empty());
         final RedirectAttributes ra = flash();
 
-        final String view = controller.createLocal("archive", "/var/lib/philter-workspace/redacted", ra);
+        final String view = controller.createLocal("archive", TMP, ra);
 
         assertEquals("redirect:/admin/destinations", view);
         assertEquals("Local directory destination \"archive\" added.", success(ra));
@@ -140,12 +144,12 @@ class AdminDestinationControllerTest {
         final LocalDirectoryDestination saved = captor.getValue();
         assertNotNull(saved.getId());
         assertEquals("archive", saved.getName());
-        assertEquals("/var/lib/philter-workspace/redacted", saved.getDirectoryPath());
+        assertEquals(TMP, saved.getDirectoryPath());
         assertNotNull(saved.getCreatedAt());
 
         verify(auditLogService).log(eq("LOCAL_DESTINATION_CREATE"),
                 eq("LocalDirectoryDestination"), eq(saved.getId()),
-                eq(Map.of("name", "archive", "directoryPath", "/var/lib/philter-workspace/redacted")));
+                eq(Map.of("name", "archive", "directoryPath", TMP)));
     }
 
     @Test
@@ -153,20 +157,20 @@ class AdminDestinationControllerTest {
         when(localRepository.findFirstByNameIgnoreCase("archive")).thenReturn(Optional.empty());
         final RedirectAttributes ra = flash();
 
-        controller.createLocal("  archive  ", "  /tmp/out  ", ra);
+        controller.createLocal("  archive  ", "  " + TMP + "  ", ra);
 
         final ArgumentCaptor<LocalDirectoryDestination> captor =
                 ArgumentCaptor.forClass(LocalDirectoryDestination.class);
         verify(localRepository).save(captor.capture());
         assertEquals("archive", captor.getValue().getName());
-        assertEquals("/tmp/out", captor.getValue().getDirectoryPath());
+        assertEquals(TMP, captor.getValue().getDirectoryPath());
     }
 
     @Test
     void localCreateRejectsBlankName() {
         final RedirectAttributes ra = flash();
 
-        controller.createLocal("   ", "/tmp/out", ra);
+        controller.createLocal("   ", TMP, ra);
 
         assertEquals("Name is required.", error(ra));
         verify(localRepository, never()).save(any());
@@ -190,7 +194,7 @@ class AdminDestinationControllerTest {
         when(localRepository.findFirstByNameIgnoreCase("archive")).thenReturn(Optional.of(existing));
         final RedirectAttributes ra = flash();
 
-        controller.createLocal("archive", "/tmp/out", ra);
+        controller.createLocal("archive", TMP, ra);
 
         assertEquals("A local directory destination named \"archive\" already exists.", error(ra));
         verify(localRepository, never()).save(any());
@@ -203,7 +207,7 @@ class AdminDestinationControllerTest {
                 .thenThrow(new DuplicateKeyException("dup"));
         final RedirectAttributes ra = flash();
 
-        final String view = controller.createLocal("archive", "/tmp/out", ra);
+        final String view = controller.createLocal("archive", TMP, ra);
 
         assertEquals("redirect:/admin/destinations", view);
         assertEquals("A local directory destination named \"archive\" already exists.", error(ra));
@@ -221,7 +225,7 @@ class AdminDestinationControllerTest {
         when(localRepository.findById("l1")).thenReturn(Optional.of(existing));
         final RedirectAttributes ra = flash();
 
-        final String view = controller.editLocal("l1", "/new/path", ra);
+        final String view = controller.editLocal("l1", TMP, ra);
 
         assertEquals("redirect:/admin/destinations", view);
         assertEquals("Local directory destination \"archive\" updated.", success(ra));
@@ -230,11 +234,11 @@ class AdminDestinationControllerTest {
                 ArgumentCaptor.forClass(LocalDirectoryDestination.class);
         verify(localRepository).save(captor.capture());
         assertEquals("archive", captor.getValue().getName(), "name must be immutable");
-        assertEquals("/new/path", captor.getValue().getDirectoryPath());
+        assertEquals(TMP, captor.getValue().getDirectoryPath());
 
         verify(auditLogService).log(eq("LOCAL_DESTINATION_UPDATE"),
                 eq("LocalDirectoryDestination"), eq("l1"),
-                eq(Map.of("name", "archive", "directoryPath", "/new/path")));
+                eq(Map.of("name", "archive", "directoryPath", TMP)));
     }
 
     @Test
@@ -244,12 +248,12 @@ class AdminDestinationControllerTest {
         when(localRepository.findById("l1")).thenReturn(Optional.of(existing));
         final RedirectAttributes ra = flash();
 
-        controller.editLocal("l1", "  /trimmed  ", ra);
+        controller.editLocal("l1", "  " + TMP + "  ", ra);
 
         final ArgumentCaptor<LocalDirectoryDestination> captor =
                 ArgumentCaptor.forClass(LocalDirectoryDestination.class);
         verify(localRepository).save(captor.capture());
-        assertEquals("/trimmed", captor.getValue().getDirectoryPath());
+        assertEquals(TMP, captor.getValue().getDirectoryPath());
     }
 
     @Test

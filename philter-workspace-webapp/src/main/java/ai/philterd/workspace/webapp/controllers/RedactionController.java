@@ -102,6 +102,7 @@ public class RedactionController {
     private final ai.philterd.workspace.service.RdbIngestJobService rdbIngestJobService;
     private final ai.philterd.workspace.webapp.security.BootstrapKeyWarning bootstrapKeyWarning;
     private final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels;
+    private final ai.philterd.workspace.service.DataSourceImportAccess dataSourceImportAccess;
 
     public RedactionController(final RedactionService redactionService,
                                final BatchRepository batchRepository,
@@ -124,7 +125,8 @@ public class RedactionController {
                                final ai.philterd.workspace.service.S3IngestJobService s3IngestJobService,
                                final ai.philterd.workspace.service.RdbIngestJobService rdbIngestJobService,
                                final ai.philterd.workspace.webapp.security.BootstrapKeyWarning bootstrapKeyWarning,
-                               final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels) {
+                               final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels,
+                               final ai.philterd.workspace.service.DataSourceImportAccess dataSourceImportAccess) {
         this.redactionService = redactionService;
         this.batchRepository = batchRepository;
         this.documentRepository = documentRepository;
@@ -147,6 +149,7 @@ public class RedactionController {
         this.rdbIngestJobService = rdbIngestJobService;
         this.bootstrapKeyWarning = bootstrapKeyWarning;
         this.batchLabels = batchLabels;
+        this.dataSourceImportAccess = dataSourceImportAccess;
     }
 
     @GetMapping("/")
@@ -233,30 +236,20 @@ public class RedactionController {
         model.addAttribute("caseTypes", generalSettingsService.load().getCaseTypePolicies().stream()
                 .map(ai.philterd.workspace.model.CaseTypePolicy::getCaseType).toList());
 
-        final org.springframework.data.domain.Page<OpenSearchDataSource> dataSourcePage =
-                dataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")));
-        model.addAttribute("dataSources",
-                dataSourcePage != null ? dataSourcePage.getContent() : List.of());
-
-        final org.springframework.data.domain.Page<ElasticsearchDataSource> esPage =
-                esDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")));
-        model.addAttribute("esDataSources",
-                esPage != null ? esPage.getContent() : List.of());
-
-        final org.springframework.data.domain.Page<S3DataSource> s3Page =
-                s3DataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")));
-        model.addAttribute("s3DataSources",
-                s3Page != null ? s3Page.getContent() : List.of());
-
-        final org.springframework.data.domain.Page<RelationalDbDataSource> rdbPage =
-                rdbDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")));
-        model.addAttribute("rdbDataSources",
-                rdbPage != null ? rdbPage.getContent() : List.of());
-
-        final org.springframework.data.domain.Page<LocalDirectoryDataSource> localPage =
-                localDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")));
-        model.addAttribute("localDataSources",
-                localPage != null ? localPage.getContent() : List.of());
+        // #72: the import tabs offer only batches the person may import into (all for an administrator, else those
+        // whose group they lead) and only sources available to one of them.
+        final List<Batch> importBatches = dataSourceImportAccess.importBatches(authentication, batches);
+        model.addAttribute("importBatches", importBatches);
+        model.addAttribute("dataSources", dataSourceImportAccess.importableFrom(authentication,
+                content(dataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")))), importBatches));
+        model.addAttribute("esDataSources", dataSourceImportAccess.importableFrom(authentication,
+                content(esDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")))), importBatches));
+        model.addAttribute("s3DataSources", dataSourceImportAccess.importableFrom(authentication,
+                content(s3DataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")))), importBatches));
+        model.addAttribute("rdbDataSources", dataSourceImportAccess.importableFrom(authentication,
+                content(rdbDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")))), importBatches));
+        model.addAttribute("localDataSources", dataSourceImportAccess.importableFrom(authentication,
+                content(localDataSourceRepository.findAll(PageRequest.of(0, 500, Sort.by("name")))), importBatches));
 
         return "index";
     }
@@ -289,6 +282,18 @@ public class RedactionController {
         if (batch.isClosed()) {
             redirectAttributes.addFlashAttribute("error",
                     "Batch \"" + batch.getName() + "\" is closed and cannot accept new documents.");
+            return "redirect:/upload";
+        }
+        // #72: only an administrator, or a team lead of the batch's group importing from a source available to that
+        // group. A missing source, an unknown type, and a source the caller may not use get the same answer.
+        if (!dataSourceImportAccess.mayImport(authentication, dataSourceImportAccess.find(sourceType, dataSourceId),
+                batch)) {
+            final Map<String, Object> refused = new java.util.LinkedHashMap<>();
+            refused.put("sourceType", sourceType == null ? "" : sourceType);
+            refused.put("dataSourceId", dataSourceId == null ? "" : dataSourceId);
+            refused.put("batchId", batchId);
+            auditLogService.log("DATA_SOURCE_IMPORT_REFUSED", "DataSource", null, refused);
+            redirectAttributes.addFlashAttribute("error", "Selected data source is not available for this batch.");
             return "redirect:/upload";
         }
         if ("opensearch".equals(sourceType)) {
@@ -645,6 +650,10 @@ public class RedactionController {
                         ? new MediaType("text", "plain", StandardCharsets.UTF_8)
                         : MediaType.parseMediaType(resolvedContentType))
                 .body(resource);
+    }
+
+    private static <T> List<T> content(final org.springframework.data.domain.Page<T> page) {
+        return page == null ? List.of() : page.getContent();
     }
 
     /** Each document gets its own copy, since the stores encrypt its case number and filer in place. */

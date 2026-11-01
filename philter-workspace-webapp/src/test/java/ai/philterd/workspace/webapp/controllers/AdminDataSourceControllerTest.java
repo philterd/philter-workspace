@@ -52,6 +52,10 @@ import static org.mockito.Mockito.when;
  */
 class AdminDataSourceControllerTest {
 
+    /** An existing folder under the allowed root these tests use: Local Directory paths must exist under one (#72). */
+    private static final String TMP = System.getProperty("java.io.tmpdir");
+
+
     private OpenSearchDataSourceRepository repository;
     private ElasticsearchDataSourceRepository esRepository;
     private S3DataSourceRepository s3Repository;
@@ -63,6 +67,10 @@ class AdminDataSourceControllerTest {
     private ai.philterd.workspace.service.RdbPreviewService rdbPreviewService;
     private AdminDataSourceController controller;
 
+    private final ai.philterd.workspace.repository.GroupRepository groupRepository =
+            org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class);
+    private ai.philterd.workspace.service.DataSourceImportAccess dataSourceImportAccess;
+
     @BeforeEach
     void setUp() {
         repository = mock(OpenSearchDataSourceRepository.class);
@@ -70,6 +78,8 @@ class AdminDataSourceControllerTest {
         s3Repository = mock(S3DataSourceRepository.class);
         rdbRepository = mock(RelationalDbDataSourceRepository.class);
         localRepository = mock(LocalDirectoryDataSourceRepository.class);
+        dataSourceImportAccess = new ai.philterd.workspace.service.DataSourceImportAccess(repository, esRepository,
+                s3Repository, rdbRepository, localRepository, mock(ai.philterd.workspace.service.BatchAccessService.class));
         backgroundJobRepository = mock(ai.philterd.workspace.repository.BackgroundJobRepository.class);
         auditLogService = mock(AuditLogService.class);
         cipher = mock(SymmetricCipher.class);
@@ -84,7 +94,8 @@ class AdminDataSourceControllerTest {
                 auditLogService, cipher, new ObjectMapper(),
                 allowList,
                 new ai.philterd.workspace.service.JdbcUrlValidator(allowList),
-                rdbPreviewService);
+                rdbPreviewService,
+                groupRepository, dataSourceImportAccess, new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
     }
 
     private RedirectAttributes flash() { return new RedirectAttributesModelMap(); }
@@ -98,6 +109,43 @@ class AdminDataSourceControllerTest {
     // ====================================================================
     // OpenSearch
     // ====================================================================
+
+    @Test
+    void groupsAreSetOnASourceAndUnknownOnesDropped() {
+        // #72: which groups a source is available to.
+        final OpenSearchDataSource source = new OpenSearchDataSource();
+        source.setId("os-1");
+        source.setName("legal");
+        when(repository.findById("os-1")).thenReturn(Optional.of(source));
+        when(groupRepository.existsById("claims")).thenReturn(true);
+        when(groupRepository.existsById("ghost")).thenReturn(false);
+
+        controller.setGroups("opensearch", "os-1", java.util.List.of("claims", "ghost", "claims"), false, flash());
+        assertEquals(java.util.List.of("claims"), source.getGroupIds());
+        assertFalse(source.isAllGroups());
+        verify(repository).save(source);
+        verify(auditLogService).log(eq("DATA_SOURCE_GROUPS_CHANGE"), eq("DataSource"), eq("os-1"), any());
+
+        controller.setGroups("opensearch", "os-1", java.util.List.of("claims"), true, flash());
+        assertTrue(source.isAllGroups());
+        assertEquals(java.util.List.of(), source.getGroupIds(), "all groups needs no list");
+
+        controller.setGroups("opensearch", "os-1", null, false, flash());
+        assertFalse(source.isAllGroups());
+        assertEquals(java.util.List.of(), source.getGroupIds(), "neither: administrators only");
+
+        final RedirectAttributes missing = flash();
+        controller.setGroups("opensearch", "nope", java.util.List.of(), false, missing);
+        assertEquals("Data source not found.", error(missing));
+    }
+
+    @Test
+    void aLocalDirectorySourceOutsideTheAllowedRootsIsRefused() {
+        final RedirectAttributes ra = flash();
+        controller.createLocal("etc", "/etc", "*", ra);
+        assertEquals(ai.philterd.workspace.service.LocalDirectoryRoots.NOT_ALLOWED, error(ra));
+        verify(localRepository, never()).save(any());
+    }
 
     @Test
     void anEndpointThatIsNotAllowedIsRefusedOnSaveAndEdit() {
@@ -838,13 +886,13 @@ class AdminDataSourceControllerTest {
         when(localRepository.findFirstByNameIgnoreCase("incoming")).thenReturn(Optional.empty());
         final RedirectAttributes ra = flash();
 
-        controller.createLocal("incoming", "/var/lib/philter-workspace/incoming", "*.txt", ra);
+        controller.createLocal("incoming", TMP, "*.txt", ra);
 
         final ArgumentCaptor<LocalDirectoryDataSource> saved =
                 ArgumentCaptor.forClass(LocalDirectoryDataSource.class);
         verify(localRepository).save(saved.capture());
         assertEquals("incoming", saved.getValue().getName());
-        assertEquals("/var/lib/philter-workspace/incoming", saved.getValue().getDirectoryPath());
+        assertEquals(TMP, saved.getValue().getDirectoryPath());
         assertEquals("*.txt", saved.getValue().getFilenameGlob());
     }
 
@@ -858,7 +906,7 @@ class AdminDataSourceControllerTest {
     @Test
     void localCreateRejectsBlankGlob() {
         final RedirectAttributes ra = flash();
-        controller.createLocal("n", "/p", "  ", ra);
+        controller.createLocal("n", TMP, "  ", ra);
         assertEquals("Filename glob is required.", error(ra));
     }
 
@@ -869,7 +917,7 @@ class AdminDataSourceControllerTest {
         when(localRepository.findFirstByNameIgnoreCase("incoming")).thenReturn(Optional.of(existing));
         final RedirectAttributes ra = flash();
 
-        controller.createLocal("incoming", "/p", "*.txt", ra);
+        controller.createLocal("incoming", TMP, "*.txt", ra);
 
         assertNotNull(error(ra));
         assertTrue(error(ra).contains("already exists"));
@@ -900,7 +948,8 @@ class AdminDataSourceControllerTest {
                 auditLogService, cipher, new ObjectMapper(),
                 opensearchOnly,
                 new ai.philterd.workspace.service.JdbcUrlValidator(opensearchOnly),
-                rdbPreviewService);
+                rdbPreviewService,
+                groupRepository, dataSourceImportAccess, new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
 
         final java.util.Map<String, Object> result = restricted.testOpenSearch(
                 "http://attacker.example.com:9200", "contracts/_search { }", null, null);
@@ -921,7 +970,8 @@ class AdminDataSourceControllerTest {
                 auditLogService, cipher, new ObjectMapper(),
                 elasticOnly,
                 new ai.philterd.workspace.service.JdbcUrlValidator(elasticOnly),
-                rdbPreviewService);
+                rdbPreviewService,
+                groupRepository, dataSourceImportAccess, new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
 
         final java.util.Map<String, Object> result = restricted.testElasticsearch(
                 "http://attacker.example.com:9200", "orders/_search { }", null, null);
@@ -945,7 +995,8 @@ class AdminDataSourceControllerTest {
                 auditLogService, cipher, new ObjectMapper(),
                 loopbackOnly,
                 new ai.philterd.workspace.service.JdbcUrlValidator(loopbackOnly),
-                rdbPreviewService);
+                rdbPreviewService,
+                groupRepository, dataSourceImportAccess, new ai.philterd.workspace.service.LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
 
         // Use port 1 — guaranteed to refuse so the test doesn't hang on a real connect.
         final java.util.Map<String, Object> result = restricted.testOpenSearch(

@@ -57,6 +57,8 @@ services:
       # data-source host allow-list refuses unless named here. With a list set, a public host must be listed
       # too, or the list turned off for public hosts under Admin → Security.
       - PHILTER_WORKSPACE_DATA_SOURCES_ALLOWED_HOSTS=opensearch,elasticsearch,minio,postgres
+      # The folders Local Directory data sources and destinations may use: the two mounted below.
+      - PHILTER_WORKSPACE_LOCAL_DIRECTORY_ALLOWED_ROOTS=/app/local-files,/app/output
       # This stack serves plain HTTP, and a browser drops a Secure cookie over HTTP except from localhost, so
       # signing in from another address or from Safari would fail. A deployment keeps Secure cookies behind
       # HTTPS (see docker-compose.prod.yaml).

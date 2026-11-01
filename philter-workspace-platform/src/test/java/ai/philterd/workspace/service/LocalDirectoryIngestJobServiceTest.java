@@ -50,9 +50,12 @@ class LocalDirectoryIngestJobServiceTest {
     private InboxService inboxService;
     private LocalDirectoryIngestJobService service;
 
+    private final GeneralSettingsService generalSettingsService = mock(GeneralSettingsService.class);
+
     @BeforeEach
     void setUp() {
         jobRepository = mock(BackgroundJobRepository.class);
+        when(generalSettingsService.load()).thenReturn(new ai.philterd.workspace.model.GeneralSettings());
         dataSourceRepository = mock(LocalDirectoryDataSourceRepository.class);
         batchRepository = mock(BatchRepository.class);
         documentRepository = mock(DocumentRepository.class);
@@ -81,7 +84,8 @@ class LocalDirectoryIngestJobServiceTest {
                 });
         service = new LocalDirectoryIngestJobService(jobRepository, dataSourceRepository,
                 batchRepository, documentRepository, ingestQueueService, inboxService,
-                mock(AuditLogService.class), mock(DataImportLogService.class));
+                mock(AuditLogService.class), mock(DataImportLogService.class),
+                new LocalDirectoryRoots(System.getProperty("java.io.tmpdir")), generalSettingsService);
     }
 
     private static LocalDirectoryDataSource source(final String id, final Path dir, final String glob) {
@@ -178,6 +182,56 @@ class LocalDirectoryIngestJobServiceTest {
     }
 
     // ---------- run() ----------
+
+    /** A service whose only allowed root is {@code root}, unlike setUp's, which allows the whole temp folder. */
+    private LocalDirectoryIngestJobService confinedTo(final Path root) {
+        return new LocalDirectoryIngestJobService(jobRepository, dataSourceRepository,
+                batchRepository, documentRepository, ingestQueueService, inboxService,
+                mock(AuditLogService.class), mock(DataImportLogService.class),
+                new LocalDirectoryRoots(root.toString()), generalSettingsService);
+    }
+
+    @Test
+    void aSymbolicLinkOutOfTheRootAndAFileOverTheUploadLimitAreSkipped(@TempDir final Path tmp) throws Exception {
+        // #72: files are read through their real path, which must stay under the root, and no larger than an upload.
+        final Path root = Files.createDirectory(tmp.resolve("root"));
+        final Path secret = Files.writeString(Files.createDirectory(tmp.resolve("secrets")).resolve("key.txt"),
+                "outside");
+        Files.writeString(root.resolve("ok.txt"), "inside", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("big.txt"), "x".repeat(2_000), StandardCharsets.UTF_8);
+        Files.createSymbolicLink(root.resolve("leak.txt"), secret);
+        final ai.philterd.workspace.model.GeneralSettings settings = new ai.philterd.workspace.model.GeneralSettings();
+        settings.setMaxUploadFileSizeBytes(1_000);
+        when(generalSettingsService.load()).thenReturn(settings);
+        final BackgroundJob pending = pendingJob("j1", "src-1", "b1");
+        when(jobRepository.findById("j1")).thenReturn(Optional.of(pending));
+        when(dataSourceRepository.findById("src-1")).thenReturn(Optional.of(source("src-1", root, "*.txt")));
+        when(batchRepository.findById("b1")).thenReturn(Optional.of(batch("b1")));
+
+        confinedTo(root).run("j1");
+
+        verify(ingestQueueService).enqueueText(any(Batch.class), eq("ok.txt"), eq("inside"), anyInt(), any());
+        verify(ingestQueueService, never()).enqueueText(any(Batch.class), eq("leak.txt"), anyString(), anyInt(), any());
+        verify(ingestQueueService, never()).enqueueText(any(Batch.class), eq("big.txt"), anyString(), anyInt(), any());
+        assertEquals(2, pending.getFailedDocuments());
+        assertTrue(pending.getFailureMessages().stream().anyMatch(m -> m.contains("Outside the allowed root")));
+        assertTrue(pending.getFailureMessages().stream().anyMatch(m -> m.contains("upload limit")));
+    }
+
+    @Test
+    void aDirectoryOutsideTheAllowedRootsIsRefused(@TempDir final Path tmp) throws Exception {
+        final Path root = Files.createDirectory(tmp.resolve("root"));
+        final Path outside = Files.createDirectory(tmp.resolve("etc"));
+        Files.writeString(outside.resolve("passwd.txt"), "root:x:0:0");
+        when(dataSourceRepository.findById("src-1")).thenReturn(Optional.of(source("src-1", outside, "*.txt")));
+        when(batchRepository.findById("b1")).thenReturn(Optional.of(batch("b1")));
+
+        final BackgroundJob job = confinedTo(root).start("src-1", "b1", 2, "lead@example.com");
+
+        assertEquals(BackgroundJob.STATUS_FAILED, job.getStatus());
+        assertEquals(LocalDirectoryRoots.NOT_ALLOWED, job.getErrorMessage());
+        verify(ingestQueueService, never()).enqueueText(any(Batch.class), anyString(), anyString(), anyInt(), any());
+    }
 
     @Test
     void runEnqueuesEachMatchingFileWithSourceAttribution(@TempDir final Path dir) throws Exception {

@@ -30,7 +30,7 @@ filesystem.
 | Field          | Required | Notes                                                                         |
 | -------------- | -------- | ----------------------------------------------------------------------------- |
 | Name           | yes      | Display name; unique among local destinations (case-insensitive)              |
-| Directory path | yes      | Absolute path on the application server's filesystem                          |
+| Directory path | yes      | Absolute path on the application server's filesystem, an existing folder under one of the roots in `philter-workspace.local-directory.allowed-roots` (see [Data sources](data-sources.md#local-directory)). A write that would follow a symbolic link out of it is refused. |
 
 No credentials — the directory is written with the application's process
 identity, so make sure the path exists, is a directory, and is writable by

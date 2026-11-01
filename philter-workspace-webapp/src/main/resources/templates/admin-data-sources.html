@@ -343,8 +343,10 @@
                             </td>
                         </tr>
                         <tr th:each="d : ${dataSources}" class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                th:text="${d.name}">name</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                <span th:text="${d.name}">name</span>
+                                <div th:replace="~{fragments/data-source-groups :: groups('opensearch', ${d.id})}"></div>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono"
                                 th:text="${d.endpoint}">http://localhost:9200</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
@@ -484,8 +486,10 @@
                             </td>
                         </tr>
                         <tr th:each="d : ${esDataSources}" class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                th:text="${d.name}">name</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                <span th:text="${d.name}">name</span>
+                                <div th:replace="~{fragments/data-source-groups :: groups('elasticsearch', ${d.id})}"></div>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono"
                                 th:text="${d.endpoint}">http://localhost:9200</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
@@ -637,8 +641,10 @@
                             </td>
                         </tr>
                         <tr th:each="s : ${s3DataSources}" class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                th:text="${s.name}">name</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                <span th:text="${s.name}">name</span>
+                                <div th:replace="~{fragments/data-source-groups :: groups('s3', ${s.id})}"></div>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
                                 <span th:if="${s.endpoint != null and !#strings.isEmpty(s.endpoint)}"
                                       th:text="${s.endpoint}">http://minio:9000</span>
@@ -794,8 +800,10 @@
                             </td>
                         </tr>
                         <tr th:each="r : ${rdbDataSources}" class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                th:text="${r.name}">name</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                <span th:text="${r.name}">name</span>
+                                <div th:replace="~{fragments/data-source-groups :: groups('rdb', ${r.id})}"></div>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono"
                                 th:text="${r.jdbcUrl}">jdbc:postgresql://host/db</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
@@ -908,8 +916,10 @@
                             </td>
                         </tr>
                         <tr th:each="l : ${localDataSources}" class="hover:bg-gray-50">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
-                                th:text="${l.name}">name</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                <span th:text="${l.name}">name</span>
+                                <div th:replace="~{fragments/data-source-groups :: groups('local', ${l.id})}"></div>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono"
                                 th:text="${l.directoryPath}">/var/lib/philter-workspace/incoming</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono"

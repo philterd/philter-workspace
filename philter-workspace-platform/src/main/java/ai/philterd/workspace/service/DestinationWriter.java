@@ -46,8 +46,11 @@ public class DestinationWriter {
 
     private final SymmetricCipher symmetricCipher;
 
-    public DestinationWriter(final SymmetricCipher symmetricCipher) {
+    private final LocalDirectoryRoots roots;
+
+    public DestinationWriter(final SymmetricCipher symmetricCipher, final LocalDirectoryRoots roots) {
         this.symmetricCipher = symmetricCipher;
+        this.roots = roots;
     }
 
     /**
@@ -65,7 +68,9 @@ public class DestinationWriter {
         try {
             final Path part = partFile(t.target);
             try {
-                Files.write(part, payload);
+                // CREATE_NEW: never write through anything already at the temporary name, such as a link (#72).
+                Files.write(part, payload, java.nio.file.StandardOpenOption.CREATE_NEW,
+                        java.nio.file.StandardOpenOption.WRITE);
                 publish(part, t.target);
             } finally {
                 Files.deleteIfExists(part);
@@ -90,7 +95,8 @@ public class DestinationWriter {
         try {
             final Path part = partFile(t.target);
             try {
-                Files.copy(source, part, StandardCopyOption.REPLACE_EXISTING);
+                // Without REPLACE_EXISTING: never write through anything already at the temporary name (#72).
+                Files.copy(source, part);
                 publish(part, t.target);
             } finally {
                 Files.deleteIfExists(part);
@@ -137,12 +143,17 @@ public class DestinationWriter {
                 || destination.getDirectoryPath().isBlank()) {
             return LocalTarget.fail("Local directory destination is missing a directory path.");
         }
-        final Path dir = Paths.get(destination.getDirectoryPath()).toAbsolutePath().normalize();
-        if (!Files.exists(dir)) {
-            return LocalTarget.fail("Directory does not exist: " + dir);
+        final Path configured = Paths.get(destination.getDirectoryPath()).toAbsolutePath().normalize();
+        if (!Files.exists(configured)) {
+            return LocalTarget.fail("Directory does not exist: " + configured);
         }
-        if (!Files.isDirectory(dir)) {
-            return LocalTarget.fail("Path is not a directory: " + dir);
+        if (!Files.isDirectory(configured)) {
+            return LocalTarget.fail("Path is not a directory: " + configured);
+        }
+        // #72: only under an administrator-configured root, by its real path.
+        final Path dir = roots.confine(destination.getDirectoryPath());
+        if (dir == null) {
+            return LocalTarget.fail(LocalDirectoryRoots.NOT_ALLOWED);
         }
         final Path target = dir.resolve(filename).normalize();
         // Path-traversal defence: a filename like "../etc/passwd" would resolve outside the configured
@@ -160,6 +171,14 @@ public class DestinationWriter {
             } catch (IOException e) {
                 return LocalTarget.fail("Could not create destination subdirectory " + parent + ": " + e.getMessage());
             }
+        }
+        // A subfolder that is a symbolic link out of the directory is refused (#72).
+        try {
+            if (parent != null && !parent.toRealPath().startsWith(dir)) {
+                return LocalTarget.fail("Refusing to write outside the destination directory: " + filename);
+            }
+        } catch (IOException e) {
+            return LocalTarget.fail("Could not check destination subdirectory " + parent + ": " + e.getMessage());
         }
         return LocalTarget.ok(target);
     }

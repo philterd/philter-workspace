@@ -18,6 +18,27 @@ redacted documents go *out*, see [Destinations](destinations.md).
 > background job that pulls documents into the redaction queue; progress is
 > visible on the Background Jobs page.
 
+## Who can import from a source
+
+Each data source is available to one or more groups, to all groups, or, with
+none chosen, to administrators only. **Groups** under a source's name on this
+page sets it; the change is recorded in the audit log as
+`DATA_SOURCE_GROUPS_CHANGE`.
+
+Importing from a source into a batch is for:
+
+- an administrator, from any source into any batch;
+- a team lead of the batch's group, from a source available to that group.
+
+Reviewers do not import from data sources. The **Add Documents** page lists only
+the batches a person may import into and the sources they may use with them, and
+an import is accepted only for that pairing. A refused import answers *"Selected
+data source is not available for this batch."*, whether or not the source
+exists, and is recorded as `DATA_SOURCE_IMPORT_REFUSED`.
+
+A source saved before groups existed, and a new source until its groups are set,
+is for administrators only.
+
 ## Source types
 
 The page is split into five sections, one per type. Names must be unique
@@ -630,6 +651,15 @@ SELECT body, id AS filename FROM documents ORDER BY id
 
 No credentials — the directory is read with the application's process
 identity, so make sure the path is reachable and readable by that user.
+
+The directory must be an existing folder under one of the roots in
+`philter-workspace.local-directory.allowed-roots`
+(`PHILTER_WORKSPACE_LOCAL_DIRECTORY_ALLOWED_ROOTS`), a comma-separated list of
+folders. With no roots set, Local Directory sources and destinations are refused.
+Paths are compared by their real path, both when a source is saved and when an
+import runs, and each file is read through its real path: a symbolic link that
+leads out of the root is skipped and counted as failed, as is a file larger than
+the maximum upload file size under **Admin → General** (10 MB by default).
 
 When the user clicks **Ingest from Local Directory**, the worker walks the
 configured path and queues every regular file whose **relative** path

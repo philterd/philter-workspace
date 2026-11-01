@@ -75,7 +75,7 @@ class DocumentDeliveryServiceTest {
             @Override public Instant instant() { return now.get(); }
         };
         service = new DocumentDeliveryService(documents, batches, locals, s3s,
-                new DestinationWriter(mock(SymmetricCipher.class)), audit, clock);
+                new DestinationWriter(mock(SymmetricCipher.class), new LocalDirectoryRoots(System.getProperty("java.io.tmpdir"))), audit, clock);
         when(audit.hashForAudit(anyString())).thenAnswer(inv -> "hash:" + inv.getArgument(0).toString().length());
 
         destination = new LocalDirectoryDestination();

@@ -136,7 +136,7 @@ groups, a team lead has the same permissions as the **USER** column.
 | Feature | USER | Team lead | AUDITOR | ADMIN |
 |---------|:----:|:---------:|:-------:|:-----:|
 | Upload a document via the web form | ✓ (own group) | ✓ (own group) | — | ✓ |
-| Ingest from a configured data source | ✓ (own group) | ✓ (own group) | — | ✓ |
+| Ingest from a configured data source | No | ✓ (batches of a group they lead, from a source available to it) | No | ✓ |
 | Configure a data source / destination | — | — | — | ✓ |
 | Configure a Philter / Ollama instance | — | — | — | ✓ |
 | Test an outbound integration (Test buttons) | — | — | — | ✓ |

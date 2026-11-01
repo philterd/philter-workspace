@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class DestinationTesterTest {
 
-    private final DestinationTester tester = new DestinationTester();
+    private final DestinationTester tester = new DestinationTester(new LocalDirectoryRoots(System.getProperty("java.io.tmpdir")));
 
     // --- Local directory ----------------------------------------------------
 

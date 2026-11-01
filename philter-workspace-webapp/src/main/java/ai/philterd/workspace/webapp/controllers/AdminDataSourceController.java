@@ -83,6 +83,10 @@ public class AdminDataSourceController {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
+    private final ai.philterd.workspace.service.LocalDirectoryRoots localDirectoryRoots;
+    private final ai.philterd.workspace.repository.GroupRepository groupRepository;
+    private final ai.philterd.workspace.service.DataSourceImportAccess dataSourceImportAccess;
+
     public AdminDataSourceController(final OpenSearchDataSourceRepository repository,
                                      final ElasticsearchDataSourceRepository esRepository,
                                      final S3DataSourceRepository s3Repository,
@@ -94,7 +98,13 @@ public class AdminDataSourceController {
                                      final ObjectMapper objectMapper,
                                      final ai.philterd.workspace.service.DataSourceHostAllowList hostAllowList,
                                      final ai.philterd.workspace.service.JdbcUrlValidator jdbcUrlValidator,
-                                     final RdbPreviewService rdbPreviewService) {
+                                     final RdbPreviewService rdbPreviewService,
+                                     final ai.philterd.workspace.repository.GroupRepository groupRepository,
+                                     final ai.philterd.workspace.service.DataSourceImportAccess dataSourceImportAccess,
+                                     final ai.philterd.workspace.service.LocalDirectoryRoots localDirectoryRoots) {
+        this.localDirectoryRoots = localDirectoryRoots;
+        this.groupRepository = groupRepository;
+        this.dataSourceImportAccess = dataSourceImportAccess;
         this.repository = repository;
         this.esRepository = esRepository;
         this.s3Repository = s3Repository;
@@ -175,7 +185,52 @@ public class AdminDataSourceController {
                 .findAll(PageRequest.of(0, 500, Sort.by("name"))).getContent();
         model.addAttribute("localDataSources", localSources);
 
+        // Each source's group scope, keyed "<type>:<id>", for the Groups control on every row (#72).
+        final Map<String, ai.philterd.workspace.model.GroupScopedSource> scopes = new java.util.HashMap<>();
+        sources.forEach(s -> scopes.put("opensearch:" + s.getId(), s));
+        esSources.forEach(s -> scopes.put("elasticsearch:" + s.getId(), s));
+        s3Sources.forEach(s -> scopes.put("s3:" + s.getId(), s));
+        rdbSources.forEach(s -> scopes.put("rdb:" + s.getId(), s));
+        localSources.forEach(s -> scopes.put("local:" + s.getId(), s));
+        model.addAttribute("sourceScopes", scopes);
+        final List<ai.philterd.workspace.model.Group> groups = groupRepository.findAll(Sort.by("name"));
+        model.addAttribute("groups", groups);
+        final Map<String, String> groupNames = groups.stream().collect(java.util.stream.Collectors.toMap(
+                ai.philterd.workspace.model.Group::getId,
+                g -> g.getName() == null ? g.getId() : g.getName(), (a, b) -> a));
+        final Map<String, String> labels = new java.util.HashMap<>();
+        scopes.forEach((key, source) -> labels.put(key, source.isAllGroups() ? "All groups"
+                : source.getGroupIds().isEmpty() ? "Administrators only"
+                : String.join(", ", source.getGroupIds().stream().map(g -> groupNames.getOrDefault(g, g)).toList())));
+        model.addAttribute("scopeLabels", labels);
+
         return "admin-data-sources";
+    }
+
+    /**
+     * Sets which groups a data source is available to (#72): {@code allGroups}, or the groups in {@code groupIds}. With
+     * neither, it is for administrators only. Unknown group ids are dropped.
+     */
+    @PostMapping("/groups/{type}/{id}")
+    public String setGroups(@PathVariable final String type,
+                            @PathVariable final String id,
+                            @RequestParam(value = "groupIds", required = false) final List<String> groupIds,
+                            @RequestParam(value = "allGroups", defaultValue = "false") final boolean allGroups,
+                            final RedirectAttributes redirectAttributes) {
+        final ai.philterd.workspace.model.GroupScopedSource source = dataSourceImportAccess.find(type, id);
+        if (source == null) {
+            redirectAttributes.addFlashAttribute("error", "Data source not found.");
+            return "redirect:/admin/data-sources";
+        }
+        final List<String> known = groupIds == null ? List.of()
+                : groupIds.stream().distinct().filter(groupRepository::existsById).toList();
+        source.setAllGroups(allGroups);
+        source.setGroupIds(allGroups ? List.of() : known);
+        dataSourceImportAccess.save(source);
+        auditLogService.log("DATA_SOURCE_GROUPS_CHANGE", "DataSource", id,
+                Map.of("sourceType", type, "allGroups", allGroups, "groupIds", source.getGroupIds()));
+        redirectAttributes.addFlashAttribute("success", "Groups for \"" + source.getName() + "\" saved.");
+        return "redirect:/admin/data-sources";
     }
 
     @PostMapping
@@ -1297,6 +1352,11 @@ public class AdminDataSourceController {
         }
         if (trimmedPath.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Directory path is required.");
+            return "redirect:/admin/data-sources";
+        }
+        // #72: only under an administrator-configured root, by its real path.
+        if (localDirectoryRoots.confine(trimmedPath) == null) {
+            redirectAttributes.addFlashAttribute("error", ai.philterd.workspace.service.LocalDirectoryRoots.NOT_ALLOWED);
             return "redirect:/admin/data-sources";
         }
         if (trimmedGlob.isEmpty()) {

@@ -53,12 +53,16 @@ public class AdminDestinationController {
     private final DestinationTester destinationTester;
     private final ai.philterd.workspace.repository.BatchRepository batchRepository;
 
+    private final ai.philterd.workspace.service.LocalDirectoryRoots localDirectoryRoots;
+
     public AdminDestinationController(final LocalDirectoryDestinationRepository localRepository,
                                       final S3DestinationRepository s3Repository,
                                       final AuditLogService auditLogService,
                                       final SymmetricCipher cipher,
                                       final DestinationTester destinationTester,
-                                      final ai.philterd.workspace.repository.BatchRepository batchRepository) {
+                                      final ai.philterd.workspace.repository.BatchRepository batchRepository,
+                                      final ai.philterd.workspace.service.LocalDirectoryRoots localDirectoryRoots) {
+        this.localDirectoryRoots = localDirectoryRoots;
         this.localRepository = localRepository;
         this.s3Repository = s3Repository;
         this.auditLogService = auditLogService;
@@ -97,6 +101,11 @@ public class AdminDestinationController {
         }
         if (trimmedPath.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Directory path is required.");
+            return "redirect:/admin/destinations";
+        }
+        // #72: only under an administrator-configured root, by its real path.
+        if (localDirectoryRoots.confine(trimmedPath) == null) {
+            redirectAttributes.addFlashAttribute("error", ai.philterd.workspace.service.LocalDirectoryRoots.NOT_ALLOWED);
             return "redirect:/admin/destinations";
         }
         if (localRepository.findFirstByNameIgnoreCase(trimmedName).isPresent()) {
@@ -138,6 +147,11 @@ public class AdminDestinationController {
         final String trimmedPath = directoryPath == null ? "" : directoryPath.trim();
         if (trimmedPath.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Directory path is required.");
+            return "redirect:/admin/destinations";
+        }
+        // #72: only under an administrator-configured root, by its real path.
+        if (localDirectoryRoots.confine(trimmedPath) == null) {
+            redirectAttributes.addFlashAttribute("error", ai.philterd.workspace.service.LocalDirectoryRoots.NOT_ALLOWED);
             return "redirect:/admin/destinations";
         }
 

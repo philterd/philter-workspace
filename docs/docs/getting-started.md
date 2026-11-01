@@ -87,6 +87,19 @@ Group membership scopes what reviewers see. By default reviewers only see
 batches and documents in groups they belong to; admins can toggle a "Limit to
 my groups" checkbox to switch between scoped and global views.
 
+## Upgrading: data source groups and Local Directory roots
+
+This version scopes data sources to groups and confines Local Directory paths:
+
+- **Data sources start as administrators only.** Until an administrator sets a
+  source's groups under **Admin → Data Sources**, only administrators can import
+  from it. Team leads of a chosen group can then import into its batches;
+  reviewers no longer import. See
+  [Who can import from a source](admin/data-sources.md#who-can-import-from-a-source).
+- **Local Directory needs allowed roots.** Set
+  `PHILTER_WORKSPACE_LOCAL_DIRECTORY_ALLOWED_ROOTS` to the folders Local Directory
+  sources and destinations use, or they are refused, including existing ones.
+
 ## Upgrading from Arbiter
 
 Philter Workspace was named Arbiter. Moving an Arbiter deployment to Philter Workspace changes the
