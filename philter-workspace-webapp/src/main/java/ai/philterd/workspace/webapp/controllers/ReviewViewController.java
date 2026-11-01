@@ -24,7 +24,6 @@ import ai.philterd.workspace.model.OllamaInstance;
 import ai.philterd.workspace.repository.BatchRepository;
 import ai.philterd.workspace.repository.ComplianceProfileRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
-import ai.philterd.workspace.repository.FinalizationPolicyRepository;
 import ai.philterd.workspace.repository.OllamaInstanceRepository;
 import ai.philterd.workspace.repository.SpanRepository;
 import ai.philterd.workspace.repository.UserRepository;
@@ -38,7 +37,6 @@ import ai.philterd.workspace.service.LlmJudgeDefaultsService;
 import ai.philterd.workspace.service.DocumentSearchService;
 import ai.philterd.workspace.service.UserGroupsService;
 import ai.philterd.workspace.service.UserSettingsService;
-import ai.philterd.workspace.service.RedactionCertificateService;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
@@ -98,11 +96,10 @@ public class ReviewViewController {
     private final ApprovalRuleEvaluator approvalRuleEvaluator;
     private final DocumentSearchService searchService;
     private final ai.philterd.workspace.service.DocumentLockService documentLockService;
-    private final RedactionCertificateService redactionCertificateService;
-    private final FinalizationPolicyRepository finalizationPolicyRepository;
     private final ai.philterd.workspace.service.GeneralSettingsService generalSettingsService;
     private final ai.philterd.workspace.service.DocumentDeliveryService deliveryService;
     private final ai.philterd.workspace.service.DocumentChangeGuard changeGuard;
+    private final ai.philterd.workspace.service.DocumentFinalizationService finalizationService;
 
     public ReviewViewController(final DocumentRepository documentRepository,
                                 final SpanRepository spanRepository,
@@ -118,11 +115,10 @@ public class ReviewViewController {
                                 final ApprovalRuleEvaluator approvalRuleEvaluator,
                                 final DocumentSearchService searchService,
                                 final ai.philterd.workspace.service.DocumentLockService documentLockService,
-                                final RedactionCertificateService redactionCertificateService,
-                                final FinalizationPolicyRepository finalizationPolicyRepository,
                                 final ai.philterd.workspace.service.GeneralSettingsService generalSettingsService,
                                 final ai.philterd.workspace.service.DocumentDeliveryService deliveryService,
-                                final ai.philterd.workspace.service.DocumentChangeGuard changeGuard) {
+                                final ai.philterd.workspace.service.DocumentChangeGuard changeGuard,
+                                final ai.philterd.workspace.service.DocumentFinalizationService finalizationService) {
         this.documentRepository = documentRepository;
         this.spanRepository = spanRepository;
         this.batchRepository = batchRepository;
@@ -137,11 +133,10 @@ public class ReviewViewController {
         this.approvalRuleEvaluator = approvalRuleEvaluator;
         this.searchService = searchService;
         this.documentLockService = documentLockService;
-        this.redactionCertificateService = redactionCertificateService;
-        this.finalizationPolicyRepository = finalizationPolicyRepository;
         this.generalSettingsService = generalSettingsService;
         this.deliveryService = deliveryService;
         this.changeGuard = changeGuard;
+        this.finalizationService = finalizationService;
     }
 
 
@@ -424,51 +419,14 @@ public class ReviewViewController {
             return "redirect:/queue";
         }
         documentAccessService.requireDocumentAccess(authentication, document);
-        // No one finalizes a document another person is reviewing (#71).
-        final String holder = changeGuard.heldByOther(document,
-                authentication == null ? null : authentication.getName());
-        if (holder != null) {
-            redirectAttributes.addFlashAttribute("error",
-                    ai.philterd.workspace.service.DocumentChangeGuard.lockedMessage(holder));
+        // The same finalization as the API's (#61): the lock and status checks, the certificate, the audit entry,
+        // the finalization policy, and delivery.
+        try {
+            finalizationService.finalizeDocument(document, authentication == null ? null : authentication.getName(),
+                    "review");
+        } catch (ai.philterd.workspace.service.DocumentFinalizationService.FinalizationRefused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
             return "redirect:/review/" + documentId;
-        }
-        // Finalize is reachable only from a fully-approved document; the queue button is
-        // gated on (status == APPROVED && approvalsAcquired >= approvalsRequired). Defend
-        // here as well so direct POSTs can't bypass the precondition.
-        if (!"APPROVED".equals(document.getStatus())) {
-            redirectAttributes.addFlashAttribute("error",
-                    "Only APPROVED documents can be finalized.");
-            return "redirect:/review/" + documentId;
-        }
-        final String previous = document.getStatus();
-        document.changeStatus("FINALIZED");
-        // Render the redacted text now and persist it on the document so a later
-        // finalization-policy run that clears originalText/spans can't strand the
-        // Download button.
-        document.setRedactedText(renderRedactedText(document));
-        documentRepository.save(document);
-        final String email = authentication == null ? null : authentication.getName();
-        if (email != null) {
-            documentLockService.release(documentId, email);
-        }
-        // Build the Certificate of Redaction from existing audit + document state. This
-        // happens *after* the FINALIZED save so the certificate's timestamps capture the
-        // post-finalize state of the document.
-        final ai.philterd.workspace.model.RedactionCertificate certificate =
-                redactionCertificateService.generate(document, email);
-        auditLogService.log("DOCUMENT_FINALIZE", "Document", documentId,
-                Map.of("previous", previous == null ? "" : previous,
-                        "actor", email == null ? "" : email,
-                        "certificateId", certificate.getId(),
-                        "documentHash", certificate.getDocumentHash() == null
-                                ? "" : certificate.getDocumentHash()));
-        applyFinalizationPolicy(document, email);
-        // Deliver the finalized output to the batch's destination, if it has one (#24). Queued after the
-        // finalization policy has saved the document, so the delivery job and this request never save it at once.
-        final Batch batch = document.getBatchId() == null ? null
-                : batchRepository.findById(document.getBatchId()).orElse(null);
-        if (deliveryService.queue(document, batch, email)) {
-            documentRepository.save(document);
         }
         return "redirect:/queue";
     }
@@ -494,56 +452,6 @@ public class ReviewViewController {
         return "redirect:/review/" + documentId;
     }
 
-    /**
-     * Resolve the batch's finalization policy and apply its disposition. Runs after the
-     * Certificate of Redaction has been generated so destructive options (e.g. delete the
-     * source document) cannot strand the certificate.
-     */
-    private void applyFinalizationPolicy(final Document document, final String actorEmail) {
-        final String batchId = document.getBatchId();
-        final Batch batch = batchId == null ? null : batchRepository.findById(batchId).orElse(null);
-        final String policyId = batch == null ? null : batch.getFinalizationPolicyId();
-        final ai.philterd.workspace.model.FinalizationPolicy policy = (policyId == null || policyId.isBlank())
-                ? null
-                : finalizationPolicyRepository.findById(policyId).orElse(null);
-        if (policy == null) return;
-        final String option = policy.getOption();
-        switch (option == null ? "" : option) {
-            case ai.philterd.workspace.model.FinalizationPolicy.OPTION_LEGAL_HOLD:
-                auditLogService.log("FINALIZATION_POLICY_APPLIED", "Document", document.getId(),
-                        Map.of("policyId", policy.getId() == null ? "" : policy.getId(),
-                                "policyName", policy.getName() == null ? "" : policy.getName(),
-                                "option", option,
-                                "action", "RETAIN",
-                                "actor", actorEmail == null ? "" : actorEmail));
-                break;
-            case ai.philterd.workspace.model.FinalizationPolicy.OPTION_DELETE_IMMEDIATELY:
-                // Wipe the source text and the span PII from the database while keeping the
-                // Document record itself so it remains visible in the Document Queue and the
-                // Certificate of Redaction stays linkable. The pre-rendered redactedText was
-                // saved above so the Download button still works.
-                final long spansDeleted = spanRepository.deleteByDocumentId(document.getId());
-                document.setOriginalText(null);
-                document.setStoragePath(null);
-                documentRepository.save(document);
-                // The full-text index holds the original text too.
-                final boolean indexCleared = searchService.removeDocument(document.getId());
-                auditLogService.log("FINALIZATION_POLICY_APPLIED", "Document", document.getId(),
-                        Map.of("policyId", policy.getId() == null ? "" : policy.getId(),
-                                "policyName", policy.getName() == null ? "" : policy.getName(),
-                                "option", option,
-                                "action", "SOURCE_CLEARED",
-                                "spansDeleted", spansDeleted,
-                                "indexCleared", indexCleared,
-                                "actor", actorEmail == null ? "" : actorEmail));
-                break;
-            default:
-                // Other options (DELETE_AFTER_X_DAYS, DELETE_AFTER_48H) are deferred and not
-                // handled here; they require a separate scheduled job.
-                break;
-        }
-    }
-
     @GetMapping("/review/{documentId}/download")
     public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> download(
             @PathVariable final String documentId,
@@ -558,7 +466,8 @@ public class ReviewViewController {
 
         final String redacted = document.getRedactedText() != null
                 ? document.getRedactedText()
-                : renderRedactedText(document);
+                : ai.philterd.workspace.service.DocumentFinalizationService.render(document.getOriginalText(),
+                        spanRepository.findByDocumentId(documentId));
         final byte[] body = redacted.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         final String filename = redactedFilename(document.getFilename());
         final String email = authentication == null ? null : authentication.getName();
@@ -580,32 +489,6 @@ public class ReviewViewController {
         final int dot = original.lastIndexOf('.');
         if (dot <= 0) return original + "_redacted";
         return original.substring(0, dot) + "_redacted" + original.substring(dot);
-    }
-
-    /**
-     * Build the redacted text from the document's original text plus its APPROVED spans.
-     * Each approved span is replaced with {@code <<TYPE>>}. Used at finalize time (so the
-     * result can be persisted on the document) and as a fallback at download time when
-     * {@link Document#getRedactedText()} hasn't been populated for legacy reasons.
-     */
-    private String renderRedactedText(final Document document) {
-        final String originalText = document.getOriginalText() == null ? "" : document.getOriginalText();
-        final List<Span> spans = spanRepository.findByDocumentId(document.getId());
-        spans.sort(Comparator.comparingInt(s -> s.getLocation().characterStart()));
-
-        final StringBuilder out = new StringBuilder();
-        int cursor = 0;
-        for (Span span : spans) {
-            if (!"APPROVED".equals(span.getStatus())) continue;
-            final int start = span.getLocation().characterStart();
-            final int end = span.getLocation().characterEnd();
-            if (start < cursor || end > originalText.length() || start > end) continue;
-            out.append(originalText, cursor, start);
-            out.append("<<").append(span.getType().toUpperCase()).append(">>");
-            cursor = end;
-        }
-        out.append(originalText, cursor, originalText.length());
-        return out.toString();
     }
 
     @PostMapping("/review/{documentId}/release")

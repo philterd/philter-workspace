@@ -14,7 +14,7 @@ import ai.philterd.workspace.model.Span;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.SpanRepository;
 import ai.philterd.workspace.service.DocumentAccessService;
-import ai.philterd.workspace.service.RedactionApiService;
+import ai.philterd.workspace.service.DocumentFinalizationService;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,29 +23,27 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.http.MediaType;
 
-import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @RestController
 @RequestMapping("/api/v1")
 public class ExportController {
 
-    private final RedactionApiService redactionApiService;
+    private final DocumentFinalizationService finalizationService;
     private final SpanRepository spanRepository;
     private final DocumentRepository documentRepository;
     private final DocumentAccessService documentAccessService;
 
-    public ExportController(final RedactionApiService redactionApiService,
+    public ExportController(final DocumentFinalizationService finalizationService,
                             final SpanRepository spanRepository,
                             final DocumentRepository documentRepository,
                             final DocumentAccessService documentAccessService) {
-        this.redactionApiService = redactionApiService;
+        this.finalizationService = finalizationService;
         this.spanRepository = spanRepository;
         this.documentRepository = documentRepository;
         this.documentAccessService = documentAccessService;
@@ -53,17 +51,17 @@ public class ExportController {
 
     @PostMapping(value = "/documents/{id}/finalize",
             consumes = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, String> finalize(@PathVariable final String id, final Authentication authentication) throws IOException {
+    public Map<String, String> finalize(@PathVariable final String id, final Authentication authentication) {
         final Document document = documentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
-        if (!"APPROVED".equals(document.getStatus())) {
-            throw new ResponseStatusException(CONFLICT,
-                    "Document cannot be finalized: status is \"" + document.getStatus()
-                            + "\" but must be APPROVED.");
+        // The same finalization as the review page's (#61).
+        try {
+            return Map.of("finalizedText", finalizationService.finalizeDocument(document,
+                    authentication == null ? null : authentication.getName(), "api"));
+        } catch (DocumentFinalizationService.FinalizationRefused e) {
+            throw new ResponseStatusException(e.status(), e.getMessage());
         }
-        final String finalizedText = redactionApiService.finalizeRedaction(id);
-        return Map.of("finalizedText", finalizedText);
     }
 
     @GetMapping("/documents/{id}/audit")

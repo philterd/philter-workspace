@@ -44,7 +44,7 @@ and export them:
 | `DOCUMENT_REJECT`                   | Document    | Reviewer rejected a document; payload includes `previous` status and `rejectedBy` |
 | `DOCUMENT_UNAPPROVE`                | Document    | Approval rescinded and document returned to review  |
 | `DOCUMENT_UNREJECT`                 | Document    | Rejection rescinded and document returned to review |
-| `DOCUMENT_FINALIZE`                 | Document    | Document finalized; includes `certificateId` and `documentHash` |
+| `DOCUMENT_FINALIZE`                 | Document    | Document finalized; includes `certificateId`, `documentHash`, the actor, and `via`: `review` from the review page or `api` from `POST /api/v1/documents/{id}/finalize` |
 | `DOCUMENT_DOWNLOAD`                 | Document    | Reviewer downloaded a finalized redacted document   |
 | `DOCUMENT_DELIVER`                  | Document    | One attempt to write a finalized document's redacted text to its batch's [destination](destinations.md#delivering-finalized-documents), as the person who finalized it (or retried the delivery). Outcome `SUCCESS` with the destination's type, id, and name, the attempt number, the file name as a keyed hash, and the SHA-256 and size of what was written; or `FAILURE` with the destination, the attempt number, and `finalAttempt` when no more attempts follow |
 | `DOCUMENT_DELIVERY_RETRY`           | Document    | An administrator or the batch's team lead queued a failed delivery again, with the destination |

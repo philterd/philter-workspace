@@ -164,15 +164,4 @@ class PhilterRedactionsTest {
         span.setFilterType(filterType);
         return span;
     }
-
-    @Test
-    void approvedSpansAreAppliedWithoutCallingPhilter() {
-        final Redaction r = new Redaction();
-        r.setStart(4);
-        r.setEnd(15);
-        r.setType("ssn");
-
-        assertEquals("SSN SSN here", ApprovedSpans.apply(TEXT, List.of(r)));
-        assertEquals(null, query.get());
-    }
 }

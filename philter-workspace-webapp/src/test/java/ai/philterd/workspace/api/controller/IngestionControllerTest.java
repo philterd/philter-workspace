@@ -16,7 +16,6 @@ import ai.philterd.workspace.model.GeneralSettings;
 import ai.philterd.workspace.repository.BatchRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.service.GeneralSettingsService;
-import ai.philterd.workspace.service.RedactionApiService;
 import ai.philterd.workspace.util.Hashing;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +39,6 @@ import static org.mockito.Mockito.when;
 
 class IngestionControllerTest {
 
-    private RedactionApiService redactionApiService;
     private DocumentRepository documentRepository;
     private BatchRepository batchRepository;
     private TestDoubles.FakeUserGroups userGroupsService;
@@ -50,7 +48,6 @@ class IngestionControllerTest {
 
     @BeforeEach
     void setUp() {
-        redactionApiService = mock(RedactionApiService.class);
         documentRepository = mock(DocumentRepository.class);
         batchRepository = mock(BatchRepository.class);
         userGroupsService = TestDoubles.userGroups();
@@ -59,7 +56,7 @@ class IngestionControllerTest {
         final GeneralSettings settings = new GeneralSettings();
         settings.setMaxUploadFileSizeBytes(10L * 1024L * 1024L);
         when(generalSettingsService.load()).thenReturn(settings);
-        controller = new IngestionController(redactionApiService, documentRepository,
+        controller = new IngestionController(documentRepository,
                 batchRepository, TestDoubles.batchAccess(batchRepository, userGroupsService),
                 auditLogService, generalSettingsService);
     }

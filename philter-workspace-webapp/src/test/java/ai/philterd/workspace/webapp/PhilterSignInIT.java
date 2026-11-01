@@ -137,6 +137,8 @@ class PhilterSignInIT {
     }
 
     @Autowired private MockMvc mockMvc;
+    @Autowired private ai.philterd.workspace.repository.RedactionCertificateRepository certificateRepository;
+    @Autowired private ai.philterd.workspace.service.AuditLogQueryService auditLogQueryService;
     @Autowired private SymmetricCipher cipher;
     @Autowired private ai.philterd.workspace.repository.UserRepository userRepository;
     @Autowired private ai.philterd.workspace.service.RedactionService redactionService;
@@ -1304,6 +1306,46 @@ class PhilterSignInIT {
         assertEquals(few, postWithParts.apply(60), "60 parts are allowed");
         assertTrue(few == 403 || (few >= 300 && few < 400), "a small upload reaches the security checks: " + few);
         assertTrue(tooMany != few && tooMany >= 400, "150 parts are refused by Tomcat: " + tooMany);
+    }
+
+    @Test
+    void finalizingThroughTheApiIssuesACertificateAndAuditsItLikeTheReviewPage() throws Exception {
+        final ai.philterd.workspace.model.Batch batch = new ai.philterd.workspace.model.Batch();
+        batch.setId(java.util.UUID.randomUUID().toString());
+        batch.setName("API finalize " + batch.getId());
+        batchRepository.save(batch);
+        final ai.philterd.workspace.model.Document queued = ingestQueueService.enqueueText(batch, "letter.txt",
+                "Write to jdoe@example.com about the claim.", 2);
+        drainUntilDone(queued.getId());
+        for (ai.philterd.workspace.model.Span span : spanRepository.findByDocumentId(queued.getId())) {
+            span.setStatus("APPROVED");
+            spanRepository.save(span);
+        }
+        final ai.philterd.workspace.model.Document approved = documentRepository.findById(queued.getId()).orElseThrow();
+        approved.changeStatus("APPROVED");
+        documentRepository.save(approved);
+
+        final String body = mockMvc.perform(post("/api/v1/documents/" + queued.getId() + "/finalize")
+                        .header("Authorization", "Bearer " + BOOTSTRAP_KEY).contentType("application/json"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        // The same output the review page produces (#61).
+        assertTrue(body.contains("Write to <<EMAIL-ADDRESS>> about the claim."), body);
+        final ai.philterd.workspace.model.Document finalized = documentRepository.findById(queued.getId()).orElseThrow();
+        assertEquals("FINALIZED", finalized.getStatus());
+        assertEquals("Write to <<EMAIL-ADDRESS>> about the claim.", finalized.getRedactedText());
+        assertFalse(certificateRepository.findByDocumentIdOrderByFinalizedAtDesc(queued.getId()).isEmpty(),
+                "a certificate of redaction");
+        final ai.philterd.workspace.model.AuditLog finalize = auditLogQueryService.findForDocument(queued.getId(),
+                java.util.List.of()).stream().filter(e -> "DOCUMENT_FINALIZE".equals(e.getAction())).findFirst()
+                .orElseThrow();
+        assertEquals("api", finalize.getDetails().get("via"));
+        assertEquals("admin", finalize.getDetails().get("actor"));
+
+        // Finalizing again is refused, as on the review page.
+        mockMvc.perform(post("/api/v1/documents/" + queued.getId() + "/finalize")
+                        .header("Authorization", "Bearer " + BOOTSTRAP_KEY).contentType("application/json"))
+                .andExpect(status().isConflict());
     }
 
     @Test

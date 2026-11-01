@@ -149,8 +149,8 @@ the key, so a revoked key, a deactivation, or a role change applies within that 
 not store or log the key. A Bearer key is checked only on `/api/**`; on other paths it is ignored.
 A key replaces a session cookie on the same request.
 
-Philter Workspace's other calls to Philter, such as redaction at ingest, policy
-listing, and finalization, still use `PHILTER_WORKSPACE_PHILTER_API_KEY`, not a person's
+Philter Workspace's other calls to Philter, such as redaction at ingest and policy
+listing, still use `PHILTER_WORKSPACE_PHILTER_API_KEY`, not a person's
 session key.
 
 ## Authorization

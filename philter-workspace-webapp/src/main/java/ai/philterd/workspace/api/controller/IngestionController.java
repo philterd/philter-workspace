@@ -17,7 +17,6 @@ import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.service.AuditLogService;
 import ai.philterd.workspace.service.BatchAccessService;
 import ai.philterd.workspace.service.GeneralSettingsService;
-import ai.philterd.workspace.service.RedactionApiService;
 import ai.philterd.workspace.util.Hashing;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -37,20 +36,17 @@ import org.springframework.http.MediaType;
 @RequestMapping("/api/v1")
 public class IngestionController {
 
-    private final RedactionApiService redactionApiService;
     private final DocumentRepository documentRepository;
     private final BatchRepository batchRepository;
     private final BatchAccessService batchAccessService;
     private final AuditLogService auditLogService;
     private final GeneralSettingsService generalSettingsService;
 
-    public IngestionController(final RedactionApiService redactionApiService,
-                               final DocumentRepository documentRepository,
+    public IngestionController(final DocumentRepository documentRepository,
                                final BatchRepository batchRepository,
                                final BatchAccessService batchAccessService,
                                final AuditLogService auditLogService,
                                final GeneralSettingsService generalSettingsService) {
-        this.redactionApiService = redactionApiService;
         this.documentRepository = documentRepository;
         this.batchRepository = batchRepository;
         this.batchAccessService = batchAccessService;

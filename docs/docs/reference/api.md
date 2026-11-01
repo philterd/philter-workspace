@@ -325,13 +325,16 @@ true`.
 
 ### `POST /api/v1/documents/{id}/finalize`
 
-Bearer-only. Produce the redacted text for a document by sending its approved
-spans to Philter and applying them. The response is the post-redaction string. On
-success, the document is transitioned to `FINALIZED` and the rendered
-redacted text is persisted on the document so a later download still works
-even if a finalization policy clears the source text.
-When the document's batch has a destination, the redacted text is then
-delivered to it in the background, as from the review page (see
+Bearer-only. Finalize an approved document, exactly as the review page's
+Finalize button does. The response is the redacted text: the document's text
+with each approved span replaced by its type in double angle brackets, such as
+`<<SSN>>`. On success the document is `FINALIZED`, the redacted text is kept on
+the document so a later download still works even if a finalization policy
+clears the source text, a [certificate of redaction](#get-apiv1documentsidcertificate)
+is issued, `DOCUMENT_FINALIZE` is recorded in the
+[audit log](../admin/audit-log.md) with `via` set to `api`, and the batch's
+finalization policy is applied. When the document's batch has a destination,
+the redacted text is then delivered to it in the background (see
 [Delivering finalized documents](../admin/destinations.md#delivering-finalized-documents)).
 
 The request has no body but requires `Content-Type: application/json`.
@@ -345,7 +348,7 @@ The request has no body but requires `Content-Type: application/json`.
 | `200`  | Returns `{ "finalizedText": "..." }` and the document is now `FINALIZED`.               |
 | `404`  | Document not found, or the caller lacks group access.                                   |
 | `415`  | The `Content-Type: application/json` header is missing.                                 |
-| `409`  | Document is not in `APPROVED`, **or** its source text is unavailable (e.g. cleared by a finalization policy on a prior pass) and cannot be re-finalized. |
+| `409`  | Document is not in `APPROVED`, another person holds its review lock, **or** its source text is unavailable (e.g. cleared by a finalization policy on a prior pass) and cannot be re-finalized. |
 
 ### `GET /api/v1/documents/{id}/audit`
 

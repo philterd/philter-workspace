@@ -117,6 +117,8 @@ class ReviewViewControllerTest {
                 mock(ai.philterd.workspace.service.GeneralSettingsService.class);
         when(generalSettingsService.load()).thenReturn(new ai.philterd.workspace.model.GeneralSettings());
         deliveryService = mock(ai.philterd.workspace.service.DocumentDeliveryService.class);
+        final ai.philterd.workspace.service.DocumentChangeGuard changeGuard =
+                new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService);
         controller = new ReviewViewController(documentRepository, spanRepository, batchRepository,
                 complianceProfileRepository, userGroupsService,
                 new ai.philterd.workspace.service.DocumentAccessService(batchRepository, documentRepository,
@@ -124,8 +126,10 @@ class ReviewViewControllerTest {
                 auditLogService,
                 ollamaInstanceRepository, llmJudgeDefaultsService, userSettingsService,
                 userRepository, approvalRuleEvaluator, openSearchIndexService, documentLockService,
-                redactionCertificateService, finalizationPolicyRepository, generalSettingsService, deliveryService,
-                new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService));
+                generalSettingsService, deliveryService, changeGuard,
+                new ai.philterd.workspace.service.DocumentFinalizationService(documentRepository, spanRepository,
+                        batchRepository, finalizationPolicyRepository, redactionCertificateService, documentLockService,
+                        changeGuard, openSearchIndexService, deliveryService, auditLogService));
 
         // Default lock-acquire behavior: succeed by routing the request through the
         // mocked DocumentRepository so the returned doc carries the test's stubbed

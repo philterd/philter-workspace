@@ -17,7 +17,7 @@ import ai.philterd.workspace.model.Span;
 import ai.philterd.workspace.repository.BatchRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.SpanRepository;
-import ai.philterd.workspace.service.RedactionApiService;
+import ai.philterd.workspace.service.DocumentFinalizationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -43,7 +43,7 @@ class ExportControllerTest {
 
     private static final Authentication ADMIN = TestAuth.admin("admin@example.com");
 
-    private RedactionApiService redactionApiService;
+    private DocumentFinalizationService finalizationService;
     private SpanRepository spanRepository;
     private DocumentRepository documentRepository;
     private BatchRepository batchRepository;
@@ -52,12 +52,12 @@ class ExportControllerTest {
 
     @BeforeEach
     void setUp() {
-        redactionApiService = mock(RedactionApiService.class);
+        finalizationService = mock(DocumentFinalizationService.class);
         spanRepository = mock(SpanRepository.class);
         documentRepository = mock(DocumentRepository.class);
         batchRepository = mock(BatchRepository.class);
         userGroupsService = TestDoubles.userGroups();
-        controller = new ExportController(redactionApiService, spanRepository,
+        controller = new ExportController(finalizationService, spanRepository,
                 documentRepository,
                 TestDoubles.documentAccess(batchRepository, documentRepository, userGroupsService));
 
@@ -92,7 +92,7 @@ class ExportControllerTest {
 
     @Test
     void finalizeReturnsServiceResult() throws IOException {
-        when(redactionApiService.finalizeRedaction("d1")).thenReturn("hello <<SSN>>");
+        when(finalizationService.finalizeDocument(org.mockito.ArgumentMatchers.argThat(d -> "d1".equals(d.getId())), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("api"))).thenReturn("hello <<SSN>>");
 
         final Map<String, String> result = controller.finalize("d1", ADMIN);
 
@@ -148,7 +148,7 @@ class ExportControllerTest {
         final ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> controller.finalize("d1", TestAuth.user("alice@example.com")));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
-        verify(redactionApiService, never()).finalizeRedaction(org.mockito.ArgumentMatchers.anyString());
+        verify(finalizationService, never()).finalizeDocument(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -172,43 +172,26 @@ class ExportControllerTest {
         assertTrue(result.isEmpty());
     }
 
-    // ---- status precondition enforcement ----
+    // ---- refusals (the rules themselves are DocumentFinalizationServiceTest's) ----
 
     @Test
-    void finalizeRejectsPendingDocument() throws IOException {
+    void aRefusalFromTheFinalizationServiceIsAnsweredWithItsStatus() {
         seedGroupedDocumentWithStatus("PENDING");
         userGroupsService.withMembership("alice@example.com", Set.of("g1"));
+        when(finalizationService.finalizeDocument(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenThrow(new DocumentFinalizationService.FinalizationRefused(
+                        HttpStatus.CONFLICT, "Only APPROVED documents can be finalized."));
         final ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> controller.finalize("d1", TestAuth.user("alice@example.com")));
         assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
-        verify(redactionApiService, never()).finalizeRedaction(org.mockito.ArgumentMatchers.anyString());
-    }
-
-    @Test
-    void finalizeRejectsRejectedDocument() throws IOException {
-        seedGroupedDocumentWithStatus("REJECTED");
-        userGroupsService.withMembership("alice@example.com", Set.of("g1"));
-        final ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.finalize("d1", TestAuth.user("alice@example.com")));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
-        verify(redactionApiService, never()).finalizeRedaction(org.mockito.ArgumentMatchers.anyString());
-    }
-
-    @Test
-    void finalizeRejectsNullStatus() throws IOException {
-        seedGroupedDocumentWithStatus(null);
-        userGroupsService.withMembership("alice@example.com", Set.of("g1"));
-        final ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> controller.finalize("d1", TestAuth.user("alice@example.com")));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
-        verify(redactionApiService, never()).finalizeRedaction(org.mockito.ArgumentMatchers.anyString());
+        assertEquals("Only APPROVED documents can be finalized.", ex.getReason());
     }
 
     @Test
     void finalizeAllowsApprovedDocument() throws IOException {
         seedGroupedDocument(); // status = APPROVED
         userGroupsService.withMembership("alice@example.com", Set.of("g1"));
-        when(redactionApiService.finalizeRedaction("d1")).thenReturn("redacted text");
+        when(finalizationService.finalizeDocument(org.mockito.ArgumentMatchers.argThat(d -> "d1".equals(d.getId())), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("api"))).thenReturn("redacted text");
 
         final Map<String, String> result = controller.finalize("d1", TestAuth.user("alice@example.com"));
         assertEquals("redacted text", result.get("finalizedText"));
