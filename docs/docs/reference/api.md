@@ -661,7 +661,8 @@ failing the request — search is best-effort.
 
 These endpoints proxy a configured Ollama instance to provide an LLM second
 opinion on the redactor's output. Configuration lives under
-**Admin → LLM-as-a-Judge**.
+**Admin → LLM-as-a-Judge** (see [LLM-as-a-Judge](../admin/llm-judge.md), which
+also covers HTTPS for an instance on another machine).
 
 !!! warning "PII leaves Philter Workspace on every call"
     Both `explain` and `second-opinion` send the full unredacted document text

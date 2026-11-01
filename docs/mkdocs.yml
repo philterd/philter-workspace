@@ -39,6 +39,7 @@ nav:
       - Approval rule sets: admin/rules.md
       - Data sources: admin/data-sources.md
       - Destinations: admin/destinations.md
+      - LLM-as-a-Judge: admin/llm-judge.md
       - Exporting annotations: admin/exporting.md
       - Audit log: admin/audit-log.md
       - Legal holds: admin/legal-holds.md

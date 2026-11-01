@@ -74,6 +74,10 @@ public class AdminOllamaController {
     public String list(final Model model) {
         final List<OllamaInstance> instances = repository.findAll(PageRequest.of(0, 500, Sort.by("name"))).getContent();
         model.addAttribute("instances", instances);
+        // Instances reached over plain HTTP on another machine, where document text crosses the network unencrypted.
+        model.addAttribute("plainHttpInstanceIds", instances.stream()
+                .filter(i -> ai.philterd.workspace.webapp.ui.PlainHttp.toAnotherHost(baseUrl(i)))
+                .map(OllamaInstance::getId).collect(java.util.stream.Collectors.toSet()));
         model.addAttribute("defaults", defaultsService.load());
         return "admin-llm-judge";
     }
@@ -186,8 +190,16 @@ public class AdminOllamaController {
                 Map.of("name", trimmedName, "endpoint", trimmedEndpoint, "port", port));
         redirectAttributes.addFlashAttribute("success",
                 "Ollama instance \"" + trimmedName + "\" added.");
+        if (ai.philterd.workspace.webapp.ui.PlainHttp.toAnotherHost(instanceUrl)) {
+            redirectAttributes.addFlashAttribute("warning", PLAIN_HTTP_WARNING);
+        }
         return "redirect:/admin/llm-judge";
     }
+
+    /** Why plain HTTP to another machine is a risk, and what to do instead (#85). */
+    static final String PLAIN_HTTP_WARNING = "This Ollama instance is on another machine and is reached over plain"
+            + " HTTP, so the document text and detected values sent to it cross the network unencrypted. Put HTTPS in"
+            + " front of it, and enter its endpoint as https://.";
 
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable final String id, final RedirectAttributes redirectAttributes) {
