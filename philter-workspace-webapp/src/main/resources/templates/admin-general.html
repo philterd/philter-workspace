@@ -567,7 +567,8 @@
                 <p class="text-sm text-gray-600 mb-4">
                     Reviewers can ask Philter to never flag a refused value again, or to always flag a value they
                     added by hand. A confirmed rule goes on the never-redact or always-redact list of the Philter
-                    user whose key Philter Workspace redacts batches with, and applies to every batch.
+                    user whose key Philter Workspace redacts batches with, and applies to every batch in every
+                    group.
                     <a th:href="@{/detection-rules}" class="text-brand-600 hover:underline">Detection Rules</a>
                 </p>
 
@@ -575,8 +576,10 @@
                     <label class="flex items-start gap-2 text-sm text-gray-700">
                         <input type="checkbox" name="reviewersConfirmRules" value="true" class="mt-0.5"
                                th:checked="${settings.reviewersConfirmRules}">
-                        <span>Reviewers may confirm, dismiss, and remove rules for documents they can see. When off,
-                            only administrators may, and a reviewer's rule waits as a proposal.</span>
+                        <span>Reviewers may confirm, dismiss, and remove rules for documents they can see. A rule a
+                            reviewer confirms from their own group's document changes what is redacted in every
+                            group's documents, so leave this off where groups must stay independent. When off, only
+                            administrators may, and a reviewer's rule waits as a proposal.</span>
                     </label>
                     <div>
                         <label for="ruleProposalRefusals" class="block text-xs font-medium text-gray-600 mb-1 uppercase tracking-wide">

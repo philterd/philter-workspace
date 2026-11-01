@@ -22,7 +22,7 @@ A confirmed rule is a term on the never-redact or always-redact list of the Phil
 who owns `PHILTER_WORKSPACE_PHILTER_API_KEY`, the key Philter Workspace redacts batches
 with. Philter applies those lists to every redaction that user makes, so a rule:
 
-- applies to **every batch**, whatever its policy;
+- applies to **every batch**, in every group, whatever its policy;
 - applies to **every PII type**: ignoring "Smith" refused as an organization also stops it
   being flagged as a person's name;
 - matches **without regard to case**, after trimming the value.
@@ -91,8 +91,17 @@ By default only administrators may confirm, dismiss, and remove rules. Under
 
 - **Reviewers may confirm** lets reviewers confirm, dismiss, and remove rules for the
   documents they can see. A reviewer's own rule is then confirmed as it is made.
+  Because a rule applies to every group (see [Scope](#scope)), a reviewer who confirms
+  or removes one changes what is redacted in every group's documents, including groups
+  they do not belong to. Leave this setting off where groups must stay independent.
 - **Refusals before a proposal** sets how many refusals in one batch, with no
   acceptance, propose a rule. `0` turns proposals off.
+
+Groups do not limit rules because Philter keeps one never-redact and one always-redact
+list per Philter user, and Philter Workspace redacts every batch as one user. The setting
+is kept as it is, rather than limited to reviewers in every group, because it is off by
+default, only an administrator can turn it on, and every confirmation and removal is
+audited with who made it.
 
 ## Audit
 

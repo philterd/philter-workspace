@@ -109,7 +109,7 @@ class DetectionRulesPageTest extends WebMvcSliceMocks {
                 && html.contains("action=\"/detection-rules/r1/dismiss\"")
                 && html.contains("action=\"/detection-rules/r2/remove\""), html);
         assertTrue(html.contains("every PII type"), "the scope is stated");
-        assertTrue(html.contains("data-confirm=\"Philter will stop flagging this value in every batch, as any PII type, "
+        assertTrue(html.contains("data-confirm=\"Philter will stop flagging this value in every batch in every group, as any PII type, "
                 + "ignoring case. Confirm?\""), "the whole confirmation, commas and all");
         assertTrue(html.contains("href=\"/detection-rules\""), "in the navigation");
     }
@@ -120,6 +120,19 @@ class DetectionRulesPageTest extends WebMvcSliceMocks {
         final String html = page("AUDITOR");
         assertTrue(html.contains(">Acme Dental<") && html.contains("Waiting for confirmation"), html);
         assertFalse(html.contains("/confirm\"") || html.contains("/dismiss\"") || html.contains("/remove\""), html);
+    }
+
+    @Test
+    void whenReviewersMayConfirmThePageSaysTheirRulesReachEveryGroup() throws Exception {
+        final GeneralSettings settings = new GeneralSettings();
+        settings.setTimezone("UTC");
+        settings.setReviewersConfirmRules(true);
+        when(generalSettingsService.load()).thenReturn(settings);
+
+        final String html = page("USER");
+        assertTrue(html.contains("A rule a reviewer confirms applies to every group's documents, not only their "
+                + "own group's."), html);
+        assertTrue(html.contains("every batch in every group"), "the scope names groups");
     }
 
     @Test

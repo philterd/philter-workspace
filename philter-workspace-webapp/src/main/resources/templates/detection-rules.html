@@ -33,10 +33,10 @@
 
             <p class="text-sm text-gray-600 mb-2 max-w-3xl">Rules made from reviewers' decisions. A confirmed rule is
                 a term on the never-redact or always-redact list of the Philter user whose key Philter Workspace
-                redacts batches with, so it applies to every batch, to every PII type, and without regard to case,
+                redacts batches with, so it applies to every batch in every group, to every PII type, and without regard to case,
                 from the next document Philter redacts. Documents already redacted are not changed.</p>
             <p class="text-sm text-gray-600 mb-6 max-w-3xl">
-                <span th:if="${reviewersConfirmRules}">Administrators, and reviewers for the documents they can see, may confirm rules.</span>
+                <span th:if="${reviewersConfirmRules}">Administrators, and reviewers for the documents they can see, may confirm rules. A rule a reviewer confirms applies to every group's documents, not only their own group's.</span>
                 <span th:unless="${reviewersConfirmRules}">Only administrators may confirm rules; a reviewer's rule waits here as a proposal.</span>
                 <span th:if="${ruleProposalRefusals > 0}"
                       th:text="|A value refused ${ruleProposalRefusals} times in one batch, and accepted in none of its documents, is proposed here.|">proposals</span>
@@ -67,8 +67,8 @@
                                 <th:block th:if="${r.mayConfirm}">
                                     <form th:action="@{/detection-rules/{id}/confirm(id=${r.id})}" method="post" class="inline"
                                           th:data-confirm="${r.kind == 'Always flag'
-                                              ? 'Philter will always flag this value in every batch, ignoring case, and report it as a custom dictionary match. Confirm?'
-                                              : 'Philter will stop flagging this value in every batch, as any PII type, ignoring case. Confirm?'}">
+                                              ? 'Philter will always flag this value in every batch in every group, ignoring case, and report it as a custom dictionary match. Confirm?'
+                                              : 'Philter will stop flagging this value in every batch in every group, as any PII type, ignoring case. Confirm?'}">
                                         <button type="submit" class="px-3 py-1 text-xs font-medium bg-brand-600 hover:bg-brand-700 text-white rounded">Confirm</button>
                                     </form>
                                     <form th:action="@{/detection-rules/{id}/dismiss(id=${r.id})}" method="post" class="inline">

@@ -239,7 +239,10 @@ public class AuthorizationIntegrationTest extends WebMvcSliceMocks {
     @Test
     void adminRoleReachesAdminPaths() throws Exception {
         mockMvc.perform(get("/admin/general").with(signedIn("a", "ADMIN")))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                // Reviewer-confirmed detection rules reach every group (#84).
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(
+                        org.hamcrest.Matchers.containsString("changes what is redacted in every")));
         mockMvc.perform(get("/admin/users").with(signedIn("a", "ADMIN")))
                 .andExpect(status().isOk());
         mockMvc.perform(get("/policies").with(signedIn("a", "ADMIN")))

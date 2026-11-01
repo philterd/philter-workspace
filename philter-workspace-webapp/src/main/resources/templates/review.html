@@ -1518,8 +1518,8 @@
             const text = item ? item.text : '';
             const type = item ? item.type : '';
             const scope = kind === 'NEVER'
-                ? `Philter will stop flagging "${text}" in every batch, as any PII type (not only ${type}), ignoring case.`
-                : `Philter will always flag "${text}" in every batch, ignoring case. Philter reports it as a custom dictionary match, not as ${type}.`;
+                ? `Philter will stop flagging "${text}" in every batch in every group, as any PII type (not only ${type}), ignoring case.`
+                : `Philter will always flag "${text}" in every batch in every group, ignoring case. Philter reports it as a custom dictionary match, not as ${type}.`;
             if (!confirm(`${scope} Documents already redacted are not changed.\n\nMake this rule?`)) return;
             button.disabled = true;
             const originalLabel = button.textContent;

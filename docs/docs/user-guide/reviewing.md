@@ -56,7 +56,7 @@ Each navigator entry shows:
   unambiguous text like a project name or an email address.)
 - **Don't flag this again** on a refused span, and **Always flag this** on a
   span added by hand, make a [detection rule](detection-rules.md) that changes
-  what Philter flags in documents redacted from then on, in every batch.
+  what Philter flags in documents redacted from then on, in every batch in every group.
 
 ## Adjusting a span's boundaries
 
