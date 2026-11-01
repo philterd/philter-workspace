@@ -98,13 +98,27 @@ public class SecurityConfig {
                                                    final PhilterSignInFlow philterSignInFlow,
                                                    final UserRepository userRepository,
                                                    final CsrfTokenRepository csrfTokenRepository,
-                                                   @Value("${philter-workspace.sign-in.check-interval-seconds:60}") final long checkIntervalSeconds)
+                                                   @Value("${philter-workspace.sign-in.check-interval-seconds:60}") final long checkIntervalSeconds,
+                                                   @Value("${philter-workspace.sign-in.unreachable-grace-seconds:300}") final long unreachableGraceSeconds)
             throws Exception {
         if (checkIntervalSeconds < 0) {
             throw new IllegalStateException("philter-workspace.sign-in.check-interval-seconds must be zero or more.");
         }
+        if (unreachableGraceSeconds < 0) {
+            throw new IllegalStateException("philter-workspace.sign-in.unreachable-grace-seconds must be zero or more.");
+        }
+        // Signing in counts as a successful check of the session, the start of its grace period (#82).
         final SavedRequestAwareAuthenticationSuccessHandler successHandler =
-                new SavedRequestAwareAuthenticationSuccessHandler();
+                new SavedRequestAwareAuthenticationSuccessHandler() {
+                    @Override
+                    public void onAuthenticationSuccess(final jakarta.servlet.http.HttpServletRequest request,
+                                                        final jakarta.servlet.http.HttpServletResponse response,
+                                                        final org.springframework.security.core.Authentication auth)
+                            throws jakarta.servlet.ServletException, java.io.IOException {
+                        PhilterSessionValidationFilter.recordCheck(request.getSession());
+                        super.onAuthenticationSuccess(request, response, auth);
+                    }
+                };
         successHandler.setDefaultTargetUrl("/");
 
         // Paths that ADMIN-or-AUDITOR can read but only ADMIN may mutate. Listed once and
@@ -187,7 +201,8 @@ public class SecurityConfig {
                 // After the session's SecurityContext is loaded, before authorization: a person whose
                 // Philter session key was rejected is signed out of Philter Workspace rather than served.
                 .addFilterBefore(new PhilterSessionValidationFilter(philterSignInService, userRepository,
-                        Clock.systemUTC(), Duration.ofSeconds(checkIntervalSeconds)),
+                        Clock.systemUTC(), Duration.ofSeconds(checkIntervalSeconds),
+                        Duration.ofSeconds(unreachableGraceSeconds)),
                         AuthorizationFilter.class)
                 // Drop session-cookie authentication on /api/** so only Bearer keys count;
                 // runs after the Bearer filter (which marks the request) and before the

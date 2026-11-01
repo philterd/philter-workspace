@@ -64,8 +64,12 @@ with `PASSWORD_SIGN_IN_ENABLED=true`, and Philter Workspace reaches it at `PHILT
   timeout from expiring. When Philter rejects the key (idle timeout,
   maximum lifetime, a password reset, revocation, or deactivation), Philter Workspace
   ends the session on the next check and returns the person to sign in. If
-  Philter cannot be reached, the session continues and the next request
-  checks again.
+  Philter cannot be reached, the session keeps working for five minutes after
+  its last successful check (`philter-workspace.sign-in.unreachable-grace-seconds`),
+  and each request checks again. After that, requests are refused with 503
+  until a check succeeds, so a person deactivated in Philter cannot keep their
+  session through an outage. The session is kept, and the person carries on
+  without signing in again once Philter is back.
 - **Sign-out.** Signing out of Philter Workspace revokes the key with
   `DELETE /api/api-keys/current`.
 - **Philter version.** Philter Workspace refuses sign-in to a Philter whose major version it does not

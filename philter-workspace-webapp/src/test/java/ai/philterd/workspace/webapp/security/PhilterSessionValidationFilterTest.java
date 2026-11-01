@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -154,13 +155,97 @@ class PhilterSessionValidationFilterTest {
     }
 
     @Test
-    void unreachablePhilterDoesNotEndTheSessionAndIsCheckedAgainNextTime() throws Exception {
+    void unreachablePhilterWithinTheGracePeriodIsServedAndCheckedAgainNextTime() throws Exception {
+        // #82: last checked two minutes ago, within the five-minute grace period.
+        session.setAttribute(PhilterSessionValidationFilter.VALIDATED_AT, NOW - 120_000);
         when(signInService.currentUser("enc-key")).thenThrow(new IOException("connection refused"));
 
         filter.doFilter(request, response, chain);
 
         verify(chain).doFilter(request, response);
-        assertNull(session.getAttribute(PhilterSessionValidationFilter.VALIDATED_AT));
+        assertEquals(NOW - 120_000, session.getAttribute(PhilterSessionValidationFilter.VALIDATED_AT),
+                "not a successful check, so the grace period still runs from the last one");
+    }
+
+    @Test
+    void unreachablePhilterBeyondTheGracePeriodIsRefusedButTheSessionIsKept() throws Exception {
+        session.setAttribute(PhilterSessionValidationFilter.VALIDATED_AT, NOW - 301_000);
+        when(signInService.currentUser("enc-key")).thenThrow(new IOException("connection refused"));
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain, never()).doFilter(any(), any());
+        assertEquals(503, response.getStatus());
+        assertEquals("30", response.getHeader("Retry-After"));
+        assertFalse(session.isInvalid(), "kept, so the person carries on once Philter is back");
+        verify(signInService, never()).signOut(any());
+
+        // Philter is back: the next request is checked and served.
+        org.mockito.Mockito.doReturn(active(true)).when(signInService).currentUser("enc-key");
+        final MockHttpServletResponse next = new MockHttpServletResponse();
+        filter.doFilter(request, next, chain);
+        verify(chain).doFilter(request, next);
+        assertEquals(NOW, session.getAttribute(PhilterSessionValidationFilter.VALIDATED_AT));
+    }
+
+    @Test
+    void unreachablePhilterBeyondTheGracePeriodIsAJson503OnTheApi() throws Exception {
+        session.setAttribute(PhilterSessionValidationFilter.VALIDATED_AT, NOW - 301_000);
+        when(signInService.currentUser("enc-key")).thenThrow(new IOException("timed out"));
+        final MockHttpServletRequest api = new MockHttpServletRequest("GET", "/api/v1/queue");
+        api.setSession(session);
+
+        filter.doFilter(api, response, chain);
+
+        assertEquals(503, response.getStatus());
+        assertEquals("application/json", response.getContentType().replaceAll(";.*", ""));
+        assertTrue(response.getContentAsString().contains("cannot reach Philter"), response.getContentAsString());
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    void staticFilesAreServedWithoutACheckSoTheRefusalPageLoads() throws Exception {
+        session.setAttribute(PhilterSessionValidationFilter.VALIDATED_AT, NOW - 301_000);
+        for (String path : List.of("/js/tailwind.js", "/css/app.css", "/images/philterd-wordmark.svg")) {
+            final MockHttpServletRequest asset = new MockHttpServletRequest("GET", path);
+            asset.setSession(session);
+            final MockHttpServletResponse served = new MockHttpServletResponse();
+
+            filter.doFilter(asset, served, chain);
+
+            verify(chain).doFilter(asset, served);
+        }
+        verify(signInService, never()).currentUser(any());
+    }
+
+    @Test
+    void aSessionWithNoSuccessfulCheckIsRefusedWhilePhilterIsUnreachable() throws Exception {
+        // Signing in records a check, so only a session from before that has none.
+        when(signInService.currentUser("enc-key")).thenThrow(new IOException("connection refused"));
+
+        filter.doFilter(request, response, chain);
+
+        assertEquals(503, response.getStatus());
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    void theGracePeriodIsConfigurable() throws Exception {
+        final PhilterSessionValidationFilter tight = new PhilterSessionValidationFilter(signInService, userRepository,
+                Clock.fixed(Instant.ofEpochMilli(NOW), ZoneOffset.UTC), java.time.Duration.ofMinutes(1),
+                java.time.Duration.ofSeconds(90));
+        session.setAttribute(PhilterSessionValidationFilter.VALIDATED_AT, NOW - 120_000);
+        when(signInService.currentUser("enc-key")).thenThrow(new IOException("connection refused"));
+
+        tight.doFilter(request, response, chain);
+
+        assertEquals(503, response.getStatus());
+    }
+
+    @Test
+    void signingInRecordsASuccessfulCheck() {
+        PhilterSessionValidationFilter.recordCheck(session);
+        assertTrue(session.getAttribute(PhilterSessionValidationFilter.VALIDATED_AT) instanceof Long);
     }
 
     @Test

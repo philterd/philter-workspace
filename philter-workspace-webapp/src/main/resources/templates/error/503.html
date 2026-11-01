@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!--
+  ~ Copyright 2026 Philterd, LLC.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~     http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Philter Workspace - Philter cannot be reached</title>
+    <script th:nonce="${cspNonce}" th:src="@{/js/tailwind.js}"></script>
+    <script th:nonce="${cspNonce}" th:src="@{/js/tailwind-config.js}"></script>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12">
+        <a href="https://www.philterd.ai" target="_blank" rel="noopener" class="mb-8">
+            <img th:src="@{/images/philterd-wordmark.svg}" alt="Philterd" class="h-10 opacity-80">
+        </a>
+
+        <div class="max-w-md w-full bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
+            <p class="text-7xl font-bold text-brand-600 mb-2">503</p>
+            <h1 class="text-2xl font-bold text-gray-900 mb-2">Philter cannot be reached</h1>
+            <p class="text-sm text-gray-600 mb-6">
+                Philter Workspace checks your session with Philter, and cannot reach it. You are still signed in;
+                try again in a moment.
+            </p>
+            <a th:href="@{/}"
+               class="inline-flex items-center px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition duration-200">
+                <svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+                </svg>
+                Try again
+            </a>
+        </div>
+
+        <p class="mt-8 text-xs text-gray-400">Philter Workspace</p>
+    </div>
+</body>
+</html>

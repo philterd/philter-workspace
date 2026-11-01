@@ -226,6 +226,7 @@ public class PhilterSignInController {
         request.changeSessionId();
         csrfTokenRepository.saveToken(null, request, response);
         sessionRegistry.registerNewSession(request.getSession().getId(), authentication.getPrincipal());
+        ai.philterd.workspace.webapp.security.PhilterSessionValidationFilter.recordCheck(request.getSession());
         final SecurityContext context = contextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         contextHolder.setContext(context);
