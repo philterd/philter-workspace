@@ -100,7 +100,7 @@ class SearchControllerTest {
         when(openSearchIndexService.search(eq("ssn"), eq(0), eq(10), isNull()))
                 .thenReturn(new SearchResults(0, 0, 10, List.of()));
 
-        controller.search("ssn", 0, 10, admin());
+        controller.run("ssn", 0, 10, admin());
 
         // Admins pass null so the service runs against the full index.
         verify(openSearchIndexService).search(eq("ssn"), eq(0), eq(10), isNull());
@@ -112,7 +112,7 @@ class SearchControllerTest {
         when(openSearchIndexService.search(anyString(), anyInt(), anyInt(), any()))
                 .thenReturn(new SearchResults(0, 0, 10, List.of()));
 
-        controller.search("ssn", 0, 10, user("alice@x.com"));
+        controller.run("ssn", 0, 10, user("alice@x.com"));
 
         final Collection<String> allowed = captureAllowedBatchIds(openSearchIndexService);
         assertEquals(Set.of("b-mine"), Set.copyOf(allowed),
@@ -125,7 +125,7 @@ class SearchControllerTest {
         when(openSearchIndexService.search(anyString(), anyInt(), anyInt(), any()))
                 .thenReturn(new SearchResults(0, 0, 10, List.of()));
 
-        final Map<String, Object> out = controller.search("ssn", 0, 10, user("bob@x.com"));
+        final Map<String, Object> out = controller.run("ssn", 0, 10, user("bob@x.com"));
 
         // Allow-list is empty — the service is still called but the result is empty.
         final Collection<String> allowed = captureAllowedBatchIds(openSearchIndexService);
@@ -145,7 +145,7 @@ class SearchControllerTest {
                         hit("d2", "b-mine"),
                         hit("d3", "b-mine"))));
 
-        final Map<String, Object> out = controller.search("ssn", 0, 10, user("alice@x.com"));
+        final Map<String, Object> out = controller.run("ssn", 0, 10, user("alice@x.com"));
 
         assertEquals(3L, out.get("total"));
         assertEquals(3, ((List<?>) out.get("hits")).size());
@@ -162,7 +162,7 @@ class SearchControllerTest {
                         hit("d1", "b-mine"),
                         hit("rogue", "b-foreign"))));
 
-        final Map<String, Object> out = controller.search("ssn", 0, 10, user("alice@x.com"));
+        final Map<String, Object> out = controller.run("ssn", 0, 10, user("alice@x.com"));
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) out.get("hits");
@@ -183,7 +183,7 @@ class SearchControllerTest {
                         hit("d1", "b-mine"),
                         hit("d2", "b-foreign"))));
 
-        final Map<String, Object> out = controller.search("ssn", 0, 10, admin());
+        final Map<String, Object> out = controller.run("ssn", 0, 10, admin());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) out.get("hits");
@@ -210,7 +210,7 @@ class SearchControllerTest {
         // passes through to the audit log.
         when(auditLogService.hashForAudit(pii)).thenReturn("hash-of-pan");
 
-        controller.search(pii, 0, 10, admin());
+        controller.run(pii, 0, 10, admin());
 
         @SuppressWarnings("unchecked")
         final ArgumentCaptor<Map<String, Object>> details =
@@ -235,7 +235,7 @@ class SearchControllerTest {
         when(openSearchIndexService.search(anyString(), anyInt(), anyInt(), isNull()))
                 .thenReturn(new SearchResults(0, 10, 10, List.of()));
 
-        controller.search("ssn", 10, 10, admin());
+        controller.run("ssn", 10, 10, admin());
 
         verify(auditLogService, org.mockito.Mockito.never())
                 .log(eq("DOCUMENT_SEARCH"), any(), any(), any());
@@ -253,7 +253,7 @@ class SearchControllerTest {
         live.setStatus("APPROVED");
         when(documentRepository.findAllById(any())).thenReturn(List.of(live));
 
-        final Map<String, Object> out = controller.search("ssn", 0, 10, user("alice@x.com"));
+        final Map<String, Object> out = controller.run("ssn", 0, 10, user("alice@x.com"));
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) out.get("hits");

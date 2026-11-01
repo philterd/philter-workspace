@@ -189,7 +189,7 @@
         <main class="flex-1 p-8">
             <span class="inline-flex items-baseline gap-1"><h2 class="text-3xl font-bold text-gray-900 mb-6">Search</h2><a href="/docs/concepts/" target="_blank" rel="noopener noreferrer" class="ml-3 text-sm text-brand-600 hover:underline self-baseline">Help</a></span>
 
-            <form th:action="@{/search}" method="get"
+            <form th:action="@{/search}" method="post"
                   class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6 flex flex-wrap items-end gap-3">
                 <div class="flex-1 min-w-[20rem]">
                     <label for="q" class="block text-xs font-medium text-gray-600 mb-1 uppercase tracking-wide">Search documents</label>
@@ -203,6 +203,10 @@
                     Search
                 </button>
             </form>
+
+            <div th:if="${searchExpired}" class="mb-3 text-sm text-gray-600">
+                This search has ended. A search lasts until your session ends, and only your ten most recent are kept. Search again.
+            </div>
 
             <div th:if="${query != null and !query.isEmpty()}" class="mb-3 text-sm text-gray-600">
                 <span th:if="${total > 0}">
@@ -316,7 +320,7 @@
             <div th:if="${query != null and !query.isEmpty() and total > 0}"
                  class="flex items-center justify-between mt-6">
                 <a th:if="${hasPrev}"
-                   th:href="@{/search(q=${query},offset=${prevOffset})}"
+                   th:href="@{/search(r=${searchToken},offset=${prevOffset})}"
                    class="px-4 py-2 border border-gray-300 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                     &larr; Previous
                 </a>
@@ -325,7 +329,7 @@
                     &larr; Previous
                 </span>
                 <a th:if="${hasNext}"
-                   th:href="@{/search(q=${query},offset=${nextOffset})}"
+                   th:href="@{/search(r=${searchToken},offset=${nextOffset})}"
                    class="px-4 py-2 border border-gray-300 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                     Next &rarr;
                 </a>

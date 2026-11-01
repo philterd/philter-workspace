@@ -1064,7 +1064,12 @@ class PhilterSignInIT {
             }
             assertEquals("embedded", documentSearchService.backend());
 
-            final String page = mockMvc.perform(get("/search").param("q", word).session(session).with(from(address)))
+            // The query goes in the body and comes back as a token (#78).
+            final String results = mockMvc.perform(post("/search").param("q", word).session(session)
+                            .with(from(address)).with(csrf()))
+                    .andExpect(status().is3xxRedirection()).andReturn().getResponse().getRedirectedUrl();
+            assertTrue(results.matches("/search\\?r=[0-9a-f]{32}"), results);
+            final String page = mockMvc.perform(get(results).session(session).with(from(address)))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
             assertTrue(page.contains("lease.txt") && page.contains("copy.txt"), "both documents are found");
             assertTrue(page.contains("<mark>" + word + "</mark>"), "the match is highlighted");

@@ -3,7 +3,7 @@
 Full text search is the optional capability that lets reviewers find documents
 by their content. When it is on, every document Philter Workspace redacts is also
 indexed, and the **Search** page in the sidebar, the
-[`GET /api/v1/search`](../reference/api.md) endpoint, and **Find similar
+[`POST /api/v1/search`](../reference/api.md#post-apiv1search) endpoint, and **Find similar
 documents** on the review page are served from that index.
 
 The feature is **off by default**, because the index is a copy of every
@@ -21,11 +21,16 @@ starts (see [Choosing a backend](#choosing-a-backend)):
 ## What full text search is used for
 
 - The **Search** page in the sidebar runs a full-text match over every
-  document the caller is allowed to see. Results outside the caller's group
-  visibility return as `restricted: true` with content fields nulled, so the
-  caller knows a hit exists without seeing what it is.
-- The `GET /api/v1/search` REST endpoint serves the same query for
+  document the caller is allowed to see. Results in batches the caller cannot
+  see are left out, and the total counts only the rest.
+- The `POST /api/v1/search` REST endpoint serves the same query for
   programmatic clients.
+- Neither puts the query in a URL, where access logs and browser history would
+  keep it. The Search page posts the query, keeps it in the person's session
+  encrypted with `PHILTER_WORKSPACE_CRYPTO_SECRET`, and shows the results under
+  a random token (`/search?r=…`), so back, refresh, and paging still work. A
+  session keeps its ten most recent searches, and they end with it. A query in
+  the URL (`/search?q=…`, from before) is not run.
 - The **Find similar documents** button on the document review page runs
   OpenSearch's `more_like_this` query to surface documents in the same batch
   whose text resembles the one currently open. The button is hidden on the
@@ -187,7 +192,7 @@ When disabled:
   still lives in MongoDB exactly as it did before, and review continues to
   work normally.
 - The **Search** page returns empty results (an informational note explains
-  why). The `GET /api/v1/search` endpoint behaves the same way.
+  why). The `POST /api/v1/search` endpoint behaves the same way.
 - The **Find similar documents** button on the review page is **not
   rendered** — reviewers won't see it at all rather than getting a button
   that produces empty results.

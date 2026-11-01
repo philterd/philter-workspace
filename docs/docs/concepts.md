@@ -227,10 +227,11 @@ Full text search is the optional capability that indexes every ingested
 document in **OpenSearch** so reviewers can search by content. When enabled,
 every document goes into the configured index at ingest time with its
 filename, batch, status, and full original text. The **Search** page in the
-sidebar and the `GET /api/v1/search` endpoint run a full-text match query
-against that index. Results outside the caller's group visibility return as
-`restricted: true` with content fields nulled — so the caller knows a result
-exists without seeing what it is.
+sidebar and the `POST /api/v1/search` endpoint run a full-text match query
+against that index. Results are limited to the batches the caller can see, and
+the total counts only those. Both take the query in the request body, so it
+stays out of URLs and access logs; the Search page keeps it in the person's
+session, encrypted, and shows its results under a random token.
 
 The feature is **off by default**, since the index is a copy of the original,
 unredacted text. An administrator turns it on and sets its connection details

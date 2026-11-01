@@ -163,7 +163,8 @@ class FullTextSearchAccessIntegrationTest {
         apiController = new SearchController(openSearchIndexService, documentRepository,
                 auditLogService, batchAccessService);
         viewController = new SearchViewController(openSearchIndexService, batchRepository,
-                documentRepository, userGroupsService, auditLogService);
+                documentRepository, userGroupsService, auditLogService,
+                new ai.philterd.workspace.service.SymmetricCipher(java.util.Base64.getEncoder().encodeToString(new byte[32])));
     }
 
     @AfterEach
@@ -185,7 +186,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-3", noGroupBatch.getId(), "orphan.txt")
         )));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, alice());
+        final Map<String, Object> result = apiController.run("query", 0, 10, alice());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -205,7 +206,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-2", g2Batch.getId(), "secret.txt")
         )));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, bob());
+        final Map<String, Object> result = apiController.run("query", 0, 10, bob());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -222,7 +223,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-3", noGroupBatch.getId(), "orphan.txt")
         )));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, eve());
+        final Map<String, Object> result = apiController.run("query", 0, 10, eve());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -241,7 +242,7 @@ class FullTextSearchAccessIntegrationTest {
         server.respondToSearch(twoHits(200, List.of(
                 hit("doc-1", g1Batch.getId(), "approved.txt"))));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, stranded());
+        final Map<String, Object> result = apiController.run("query", 0, 10, stranded());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -260,7 +261,7 @@ class FullTextSearchAccessIntegrationTest {
         userGroupsService.put("alice@x.com", Set.of("g1"));
         server.respondToSearch(twoHits(200, List.of()));
 
-        apiController.search("query", 0, 10, alice());
+        apiController.run("query", 0, 10, alice());
 
         final String body = server.lastSearchBody();
         assertNotNull(body, "Expected a recorded /_search request");
@@ -283,7 +284,7 @@ class FullTextSearchAccessIntegrationTest {
         // a top-level match clause (no bool wrapper) so admin sees everything in the index.
         server.respondToSearch(twoHits(200, List.of()));
 
-        apiController.search("query", 0, 10, admin());
+        apiController.run("query", 0, 10, admin());
 
         final String body = server.lastSearchBody();
         assertNotNull(body);
@@ -303,7 +304,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-1", g1Batch.getId(), "a.txt"),
                 hit("doc-2", g2Batch.getId(), "b.txt"))));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, auditor());
+        final Map<String, Object> result = apiController.run("query", 0, 10, auditor());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -324,7 +325,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-1", g1Batch.getId(), "approved.txt"),
                 hit("doc-2", g2Batch.getId(), "leak.txt"))));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, alice());
+        final Map<String, Object> result = apiController.run("query", 0, 10, alice());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
@@ -343,7 +344,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-1", g1Batch.getId(), "approved.txt"),
                 hit("doc-malformed", null, "broken.txt"))));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, alice());
+        final Map<String, Object> result = apiController.run("query", 0, 10, alice());
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");
         assertEquals(1, hits.size());
@@ -360,7 +361,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-2", g2Batch.getId(), "secret.txt"))));
 
         final ConcurrentModel model = new ConcurrentModel();
-        viewController.search("query", 0, alice(), model);
+        viewController.render("query", 0, alice(), model);
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> rows = (List<Map<String, Object>>) model.getAttribute("results");
@@ -377,7 +378,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-1", g1Batch.getId(), "approved.txt"))));
 
         final ConcurrentModel model = new ConcurrentModel();
-        viewController.search("query", 0, stranded(), model);
+        viewController.render("query", 0, stranded(), model);
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> rows = (List<Map<String, Object>>) model.getAttribute("results");
@@ -392,7 +393,7 @@ class FullTextSearchAccessIntegrationTest {
                 hit("doc-2", g2Batch.getId(), "b.txt"))));
 
         final ConcurrentModel model = new ConcurrentModel();
-        viewController.search("query", 0, admin(), model);
+        viewController.render("query", 0, admin(), model);
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> rows = (List<Map<String, Object>>) model.getAttribute("results");
@@ -411,7 +412,7 @@ class FullTextSearchAccessIntegrationTest {
         server.respondToSearch(twoHits(200, List.of(
                 hit("doc-1", g1Batch.getId(), "approved.txt"))));
 
-        final Map<String, Object> result = apiController.search("query", 0, 10, alice());
+        final Map<String, Object> result = apiController.run("query", 0, 10, alice());
 
         @SuppressWarnings("unchecked")
         final List<Map<String, Object>> hits = (List<Map<String, Object>>) result.get("hits");

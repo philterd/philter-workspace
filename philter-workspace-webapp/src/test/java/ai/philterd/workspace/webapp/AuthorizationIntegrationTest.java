@@ -274,7 +274,8 @@ public class AuthorizationIntegrationTest extends WebMvcSliceMocks {
         // before the framework's role check has a chance to grant access.
         mockMvc.perform(post("/api/v1/ingest").with(signedIn("a", "ADMIN")).with(csrf()))
                 .andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/api/v1/search?q=hi").with(signedIn("a", "ADMIN")))
+        mockMvc.perform(post("/api/v1/search").contentType("application/json").content("{\"q\":\"hi\"}")
+                        .with(signedIn("a", "ADMIN")))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -282,7 +283,8 @@ public class AuthorizationIntegrationTest extends WebMvcSliceMocks {
     void cookieAuthRejectedOnBearerOnlyApiPaths_user() throws Exception {
         mockMvc.perform(post("/api/v1/ingest").with(signedIn("u", "USER")).with(csrf()))
                 .andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/api/v1/search?q=hi").with(signedIn("u", "USER")))
+        mockMvc.perform(post("/api/v1/search").contentType("application/json").content("{\"q\":\"hi\"}")
+                        .with(signedIn("u", "USER")))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -351,7 +353,8 @@ public class AuthorizationIntegrationTest extends WebMvcSliceMocks {
                 new ai.philterd.workspace.webapp.security.PhilterApiKeys.RefusedException(
                         ai.philterd.workspace.webapp.security.PhilterApiKeys.Refusal.INVALID));
 
-        mockMvc.perform(get("/api/v1/search?q=x").with(signedIn("a", "ADMIN"))
+        mockMvc.perform(post("/api/v1/search").contentType("application/json").content("{\"q\":\"x\"}")
+                        .with(signedIn("a", "ADMIN"))
                         .header("Authorization", "Bearer not-a-real-key"))
                 .andExpect(status().isUnauthorized());
     }

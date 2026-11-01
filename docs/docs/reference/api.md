@@ -39,7 +39,7 @@ small and stable:
 | Method | Path |
 |---|---|
 | `POST` | `/api/v1/ingest` |
-| `GET`  | `/api/v1/search` |
+| `POST` | `/api/v1/search` |
 | `POST` | `/api/v1/documents/{id}/finalize` |
 | `GET`  | `/api/v1/documents/{id}/audit` |
 
@@ -600,17 +600,27 @@ receive email addresses instead — this parameter requires `ROLE_ADMIN` or
 
 ## Search
 
-### `GET /api/v1/search`
+### `POST /api/v1/search`
 
 Bearer-only. Full-text search across the [full-text index](../admin/full-text-search.md) of ingested documents. Each
 document is indexed at ingest time with its filename, batch, status, and full
 original text.
 
-| Query param | Default | Meaning                                          |
-| ----------- | ------- | ------------------------------------------------ |
-| `q`         | —       | Match query (required, runs against the text)   |
-| `offset`    | `0`     | First hit to return                              |
-| `size`      | `10`    | Max hits per page (capped at 100)                |
+The query is sent in a JSON body, with `Content-Type: application/json`, so it
+stays out of URLs, where proxy and load-balancer access logs would record it.
+
+```json
+{ "q": "string", "offset": 0, "size": 10 }
+```
+
+| Field    | Default | Meaning                                          |
+| -------- | ------- | ------------------------------------------------ |
+| `q`      | None    | Match query (required, runs against the text). A blank query is answered with `400`. |
+| `offset` | `0`     | First hit to return                              |
+| `size`   | `10`    | Max hits per page (capped at 100)                |
+
+`GET /api/v1/search?q=…` was removed: it is answered with `405`, `Allow: POST`,
+and an `error` message saying to use POST, and the query is not run.
 
 Response:
 
@@ -746,7 +756,7 @@ from philter-workspace's own UI doesn't look surprising in HTTP logs:
 | `GET /api/v1/review/{documentId}/similar` | Backs the "Find similar documents" button on the review page. Returns up to 10 hits filtered to the caller's accessible batches. |
 
 There's no programmatic-API reason to call these — use `PATCH /spans/{id}` and
-`GET /search` instead.
+`POST /search` instead.
 
 ## Errors
 

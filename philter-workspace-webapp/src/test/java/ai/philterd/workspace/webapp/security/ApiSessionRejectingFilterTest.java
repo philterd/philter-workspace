@@ -77,7 +77,7 @@ class ApiSessionRejectingFilterTest {
     void stripsSessionAuthOnSearchPath() throws Exception {
         SecurityContextHolder.getContext().setAuthentication(sessionAuth("user@x.com"));
 
-        filter.doFilter(req("/api/v1/search?q=hello"), new MockHttpServletResponse(), mock(FilterChain.class));
+        filter.doFilter(req("/api/v1/search"), new MockHttpServletResponse(), mock(FilterChain.class));
 
         assertNull(SecurityContextHolder.getContext().getAuthentication());
     }

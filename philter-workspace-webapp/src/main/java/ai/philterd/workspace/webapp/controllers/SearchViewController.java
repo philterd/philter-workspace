@@ -41,30 +41,92 @@ import java.util.Set;
 public class SearchViewController {
 
     private static final int PAGE_SIZE = 10;
+    /** The session attribute holding recent searches: a token to the query, encrypted (#78). */
+    static final String SEARCHES_ATTRIBUTE = SearchViewController.class.getName() + ".searches";
+    /** How many recent searches a session keeps, so the back button can return to each. */
+    static final int KEPT_SEARCHES = 10;
 
     private final DocumentSearchService searchService;
     private final BatchRepository batchRepository;
     private final DocumentRepository documentRepository;
     private final UserGroupsService userGroupsService;
     private final AuditLogService auditLogService;
+    private final ai.philterd.workspace.service.SymmetricCipher cipher;
+    private final java.security.SecureRandom random = new java.security.SecureRandom();
 
     public SearchViewController(final DocumentSearchService searchService,
                                 final BatchRepository batchRepository,
                                 final DocumentRepository documentRepository,
                                 final UserGroupsService userGroupsService,
-                                final AuditLogService auditLogService) {
+                                final AuditLogService auditLogService,
+                                final ai.philterd.workspace.service.SymmetricCipher cipher) {
         this.searchService = searchService;
         this.batchRepository = batchRepository;
         this.documentRepository = documentRepository;
         this.userGroupsService = userGroupsService;
         this.auditLogService = auditLogService;
+        this.cipher = cipher;
     }
 
+    /**
+     * Takes the query from the form's body and redirects to its results under a random token, so the query is never
+     * in a URL, an access log, or browser history, while back, refresh, and paging still work (#78). The query is
+     * kept in the person's session, encrypted, and only for their {@value #KEPT_SEARCHES} most recent searches.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/search")
+    public String submit(@RequestParam(name = "q", required = false) final String q,
+                         final jakarta.servlet.http.HttpSession session) {
+        final String query = q == null ? "" : q.trim();
+        if (query.isEmpty()) {
+            return "redirect:/search";
+        }
+        final byte[] bytes = new byte[16];
+        random.nextBytes(bytes);
+        final String token = java.util.HexFormat.of().formatHex(bytes);
+        // Two searches submitted at once in one session can lose one token; its page then says the search ended.
+        synchronized (org.springframework.web.util.WebUtils.getSessionMutex(session)) {
+            final LinkedHashMap<String, String> searches = searches(session);
+            searches.put(token, cipher.encrypt(query));
+            while (searches.size() > KEPT_SEARCHES) {
+                searches.remove(searches.keySet().iterator().next());
+            }
+            // Set again so a session store that saves on change, such as Spring Session's, writes it.
+            session.setAttribute(SEARCHES_ATTRIBUTE, searches);
+        }
+        return "redirect:/search?r=" + token;
+    }
+
+    /**
+     * The search page, or the results of the search {@code r} names. A query in the URL ({@code q}, the form before
+     * #78) is not run, so an old link or bookmark does not keep sending it.
+     */
     @GetMapping("/search")
-    public String search(@RequestParam(name = "q", required = false) final String q,
+    public String search(@RequestParam(name = "r", required = false) final String token,
                          @RequestParam(name = "offset", defaultValue = "0") final int offset,
+                         final jakarta.servlet.http.HttpSession session,
                          final Authentication authentication,
                          final Model model) {
+        String query = "";
+        if (token != null && !token.isBlank()) {
+            final String stored = searches(session).get(token);
+            if (stored == null) {
+                model.addAttribute("searchExpired", true);
+            } else {
+                query = cipher.decrypt(stored);
+                model.addAttribute("searchToken", token);
+            }
+        }
+        return render(query, offset, authentication, model);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static LinkedHashMap<String, String> searches(final jakarta.servlet.http.HttpSession session) {
+        final Object kept = session.getAttribute(SEARCHES_ATTRIBUTE);
+        return kept instanceof LinkedHashMap<?, ?> map ? (LinkedHashMap<String, String>) map : new LinkedHashMap<>();
+    }
+
+    /** Renders the search page for {@code q}, or the empty form when it is blank. */
+    public String render(final String q, final int offset, final Authentication authentication, final Model model) {
         final String query = q == null ? "" : q.trim();
         final int safeOffset = Math.max(0, offset);
 

@@ -17,10 +17,17 @@ import ai.philterd.workspace.service.BatchAccessService;
 import ai.philterd.workspace.service.DocumentSearchService;
 import ai.philterd.workspace.service.DocumentSearchService.SearchHit;
 import ai.philterd.workspace.service.DocumentSearchService.SearchResults;
+import ai.philterd.workspace.dto.SearchRequest;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
@@ -48,11 +55,24 @@ public class SearchController {
         this.batchAccessService = batchAccessService;
     }
 
-    @GetMapping("/search")
-    public Map<String, Object> search(@RequestParam("q") final String query,
-                                      @RequestParam(name = "offset", defaultValue = "0") final int offset,
-                                      @RequestParam(name = "size", defaultValue = "10") final int size,
+    /** The query is in the body, so it stays out of access logs and browser history (#78). */
+    @PostMapping(value = "/search", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Map<String, Object> search(@Valid @RequestBody final SearchRequest request,
                                       final Authentication authentication) {
+        return run(request.q(), request.offset() == null ? 0 : request.offset(),
+                request.size() == null ? 10 : request.size(), authentication);
+    }
+
+    /** The removed query-string form, answered with where to send the query instead. The query is not run. */
+    @GetMapping("/search")
+    public ResponseEntity<Map<String, String>> searchByUrl() {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).allow(HttpMethod.POST)
+                .body(Map.of("error", "Send the query with POST /api/v1/search in a JSON body, so it stays out of URLs."));
+    }
+
+    /** Runs a search for the caller, as {@link #search} answers it. */
+    public Map<String, Object> run(final String query, final int offset, final int size,
+                                   final Authentication authentication) {
         // Restrict at the search backend for non-admins so the reported `total` and
         // the hit list both exclude foreign documents — an attacker can no longer probe
         // queries to detect the existence of content in batches they can't see.
