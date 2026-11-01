@@ -9,417 +9,234 @@
  */
 package ai.philterd.workspace.service;
 
+import ai.philterd.workspace.model.CaseMetadata;
+import ai.philterd.workspace.model.DetectionRule;
 import ai.philterd.workspace.model.Document;
 import ai.philterd.workspace.model.DocumentComment;
+import ai.philterd.workspace.model.GeneralSettings;
+import ai.philterd.workspace.model.PendingUpload;
 import ai.philterd.workspace.model.RedactionCertificate;
 import ai.philterd.workspace.model.Span;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
+import org.springframework.data.mongodb.core.convert.NoOpDbRefResolver;
+import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for the Spring Data Mongo lifecycle callbacks that wrap PII-bearing fields with
- * transparent at-rest encryption. The tests drive the callbacks directly — Spring Data
- * Mongo is not in the picture — so what's exercised is the contract between
- * {@link PiiFieldEncryption} and {@link SymmetricCipher}.
+ * The MongoDB lifecycle callbacks that encrypt PII fields at rest. A save is driven as Spring Data drives it: the
+ * entity is converted to BSON with a real {@link MappingMongoConverter}, then {@code onBeforeSave} encrypts that
+ * BSON; a load converts BSON back and {@code onAfterConvert} decrypts it.
  */
 class PiiFieldEncryptionTest {
 
     private SymmetricCipher cipher;
-    private PiiFieldEncryption.DocumentCallbacks documentCallbacks;
-    private PiiFieldEncryption.SpanCallbacks spanCallbacks;
-    private PiiFieldEncryption.DocumentCommentCallbacks commentCallbacks;
-    private PiiFieldEncryption.RedactionCertificateCallbacks certificateCallbacks;
+    private MappingMongoConverter converter;
 
     @BeforeEach
     void setUp() {
         final byte[] key = new byte[32];
         new SecureRandom().nextBytes(key);
         cipher = new SymmetricCipher(Base64.getEncoder().encodeToString(key));
-        documentCallbacks = new PiiFieldEncryption.DocumentCallbacks(cipher);
-        spanCallbacks = new PiiFieldEncryption.SpanCallbacks(cipher);
-        commentCallbacks = new PiiFieldEncryption.DocumentCommentCallbacks(cipher);
-        certificateCallbacks = new PiiFieldEncryption.RedactionCertificateCallbacks(cipher);
+        // Configured as Spring Boot configures it, so java.time values are simple types.
+        final org.springframework.data.mongodb.core.convert.MongoCustomConversions conversions =
+                new org.springframework.data.mongodb.core.convert.MongoCustomConversions(List.of());
+        final MongoMappingContext context = new MongoMappingContext();
+        context.setSimpleTypeHolder(conversions.getSimpleTypeHolder());
+        context.afterPropertiesSet();
+        converter = new MappingMongoConverter(NoOpDbRefResolver.INSTANCE, context);
+        converter.setCustomConversions(conversions);
+        converter.afterPropertiesSet();
     }
 
-    // ---------- Document ----------
+    /** What MongoDB would store for {@code entity}. */
+    private org.bson.Document save(final Object entity) {
+        final org.bson.Document stored = new org.bson.Document();
+        converter.write(entity, stored);
+        PiiFieldEncryption.encryptStored(cipher, entity, stored);
+        return stored;
+    }
+
+    /** {@code stored} read back as an entity. */
+    private <T> T load(final Class<T> type, final org.bson.Document stored) {
+        final T entity = converter.read(type, stored);
+        PiiFieldEncryption.decrypt(cipher, entity);
+        return entity;
+    }
+
+    // ---------- saving ----------
 
     @Test
-    void documentBeforeConvertEncryptsAllPiiFields() {
+    void aSaveEncryptsWhatIsStoredAndLeavesTheEntityInPlaintext() {
         final Document d = new Document();
+        d.setId("doc-1");
+        d.setStatus("REVIEW_REQUIRED");
         d.setOriginalText("Patient: alice@example.com");
         d.setRedactedText("Patient: <<EMAIL_ADDRESS>>");
         d.setFailureMessage("LLM call failed: alice@example.com");
+        final CaseMetadata metadata = new CaseMetadata();
+        metadata.setCaseNumber("1:26-cv-00042");
+        metadata.setFiler("Jane Roe");
+        metadata.setCaseType("civil");
+        d.setCaseMetadata(metadata);
 
-        documentCallbacks.onBeforeConvert(d, "documents");
+        final org.bson.Document stored = save(d);
 
-        assertEncrypted(d.getOriginalText(), "alice@example.com");
-        assertEncrypted(d.getRedactedText(), "EMAIL_ADDRESS");
-        assertEncrypted(d.getFailureMessage(), "alice@example.com");
+        assertEncrypted(stored.getString("originalText"), "alice@example.com");
+        assertEncrypted(stored.getString("redactedText"), "EMAIL_ADDRESS");
+        assertEncrypted(stored.getString("failureMessage"), "alice@example.com");
+        final org.bson.Document storedMetadata = stored.get("caseMetadata", org.bson.Document.class);
+        assertEncrypted(storedMetadata.getString("caseNumber"), "00042");
+        assertEncrypted(storedMetadata.getString("filer"), "Jane Roe");
+        assertEquals("civil", storedMetadata.getString("caseType"), "only the listed fields are encrypted");
+        assertEquals("REVIEW_REQUIRED", stored.getString("status"));
+        // The entity is never changed, so a failed save cannot leave it holding ciphertext (#74).
+        assertEquals("Patient: alice@example.com", d.getOriginalText());
+        assertEquals("Jane Roe", d.getCaseMetadata().getFiler());
+
+        final Document loaded = load(Document.class, stored);
+        assertEquals("Patient: alice@example.com", loaded.getOriginalText());
+        assertEquals("Patient: <<EMAIL_ADDRESS>>", loaded.getRedactedText());
+        assertEquals("1:26-cv-00042", loaded.getCaseMetadata().getCaseNumber());
     }
 
     @Test
-    void documentAfterSaveRestoresPlaintextOnTheCallerReference() {
-        // The save flow encrypts the entity in-place via BeforeConvert. AfterSave must
-        // run automatically and restore plaintext so the caller's reference still
-        // surfaces what they originally set — otherwise every controller that does
-        // {@code save(d); d.getOriginalText();} would see ciphertext.
-        final Document d = new Document();
-        d.setOriginalText("alice@example.com");
-        d.setRedactedText("redacted output");
-        d.setFailureMessage(null);
-
-        documentCallbacks.onBeforeConvert(d, "documents");
-        // Sanity: after BeforeConvert the entity is encrypted (this is what gets persisted).
-        assertEncrypted(d.getOriginalText(), "alice@example.com");
-
-        // AfterSave restores plaintext on the same reference.
-        final Document returned = documentCallbacks.onAfterSave(d, new org.bson.Document(), "documents");
-        assertSame(d, returned, "The lifecycle contract is to mutate the entity in place, not replace it.");
-        assertEquals("alice@example.com", d.getOriginalText());
-        assertEquals("redacted output", d.getRedactedText());
-        assertNull(d.getFailureMessage());
-    }
-
-    @Test
-    void documentAfterConvertDecryptsValuesLoadedFromMongo() {
-        // Simulate Spring Data having read a Mongo row into an entity. The originalText
-        // value is the encrypted form on disk; AfterConvert restores plaintext.
-        final Document d = new Document();
-        d.setOriginalText(cipher.encryptField("alice@example.com"));
-        d.setRedactedText(cipher.encryptField("Patient: <<EMAIL_ADDRESS>>"));
-        d.setFailureMessage(null);
-
-        documentCallbacks.onAfterConvert(d, new org.bson.Document(), "documents");
-
-        assertEquals("alice@example.com", d.getOriginalText());
-        assertEquals("Patient: <<EMAIL_ADDRESS>>", d.getRedactedText());
-        assertNull(d.getFailureMessage());
-    }
-
-    @Test
-    void documentAfterConvertReturnsLegacyPlaintextRowsUnchanged() {
-        // A row written before encryption was switched on does NOT carry the marker
-        // prefix. AfterConvert must return its values unchanged so the rollout is
-        // backwards compatible.
-        final Document d = new Document();
-        d.setOriginalText("legacy plaintext source");
-        d.setRedactedText("legacy plaintext redacted");
-        d.setFailureMessage(null);
-
-        documentCallbacks.onAfterConvert(d, new org.bson.Document(), "documents");
-
-        assertEquals("legacy plaintext source", d.getOriginalText());
-        assertEquals("legacy plaintext redacted", d.getRedactedText());
-    }
-
-    @Test
-    void documentNullPiiFieldsAreLeftAlone() {
-        // A Document with no body text yet (e.g. a placeholder for a queued ingest) must
-        // round-trip null fields without crashing or assigning a non-null value.
-        final Document d = new Document();
-        d.setOriginalText(null);
-        d.setRedactedText(null);
-        d.setFailureMessage(null);
-
-        documentCallbacks.onBeforeConvert(d, "documents");
-        documentCallbacks.onAfterSave(d, new org.bson.Document(), "documents");
-        documentCallbacks.onAfterConvert(d, new org.bson.Document(), "documents");
-
-        assertNull(d.getOriginalText());
-        assertNull(d.getRedactedText());
-        assertNull(d.getFailureMessage());
-    }
-
-    @Test
-    void documentEmptyStringFieldsAreNotEncrypted() {
-        // Empty strings carry no PII and are useful as a "field set, but blank" signal.
-        // The encrypt path passes them through untouched so the database is easier to
-        // reason about (and so AfterConvert sees a stable empty rather than the
-        // ciphertext of "").
+    void nullAndEmptyValuesAreLeftAlone() {
         final Document d = new Document();
         d.setOriginalText("");
-        d.setRedactedText("");
-        d.setFailureMessage("");
-
-        documentCallbacks.onBeforeConvert(d, "documents");
-        assertEquals("", d.getOriginalText());
-        assertEquals("", d.getRedactedText());
-        assertEquals("", d.getFailureMessage());
+        final org.bson.Document stored = save(d);
+        assertEquals("", stored.getString("originalText"));
+        assertNull(stored.get("redactedText"));
+        assertNull(load(Document.class, stored).getRedactedText());
     }
 
     @Test
-    void documentSaveRoundTripPreservesNonPiiFields() {
-        // The callbacks must touch ONLY the PII-bearing fields. Other state on the
-        // entity (id, batchId, status, hash, source attribution, priority, lock fields)
-        // must be preserved exactly.
+    void everyStoredPiiFieldIsEncrypted() {
+        // The paths encryptStored uses must cover every field decrypt does, or a value is stored in plaintext.
+        final String secret = "S3cretValue";
         final Document d = new Document();
-        d.setId("doc-1");
-        d.setBatchId("b-1");
-        d.setStatus("REVIEW_REQUIRED");
-        d.setOriginalText("alice@example.com");
-        d.setContentSha512("0123abc");
-        d.setSourceSystem("OPENSEARCH");
-        d.setPriority(3);
+        d.setOriginalText(secret);
+        d.setRedactedText(secret);
+        d.setFailureMessage(secret);
+        final CaseMetadata metadata = new CaseMetadata();
+        metadata.setCaseNumber(secret);
+        metadata.setFiler(secret);
+        d.setCaseMetadata(metadata);
+        final Span span = new Span();
+        span.setText(secret);
+        final GeneralSettings settings = new GeneralSettings();
+        settings.setOpensearchPassword(secret);
+        final DocumentComment comment = new DocumentComment();
+        comment.setText(secret);
+        final DetectionRule rule = new DetectionRule();
+        rule.setText(secret);
+        final RedactionCertificate certificate = new RedactionCertificate();
+        certificate.setDocumentFilename(secret);
+        final RedactionCertificate.OverturnEntry overturn = new RedactionCertificate.OverturnEntry();
+        overturn.setSpanText(secret);
+        certificate.setOverturns(List.of(overturn, overturn));
 
-        documentCallbacks.onBeforeConvert(d, "documents");
-        // Only originalText is mutated — non-PII fields are unchanged.
-        assertEquals("doc-1", d.getId());
-        assertEquals("b-1", d.getBatchId());
-        assertEquals("REVIEW_REQUIRED", d.getStatus());
-        assertEquals("0123abc", d.getContentSha512());
-        assertEquals("OPENSEARCH", d.getSourceSystem());
-        assertEquals(3, d.getPriority());
+        for (Object entity : List.of(d, span, settings, comment, rule, certificate)) {
+            final org.bson.Document stored = save(entity);
+            assertFalse(stored.toJson().contains(secret), entity.getClass().getSimpleName() + ": " + stored.toJson());
+            final Object loaded = load(entity.getClass(), stored);
+            final org.bson.Document again = new org.bson.Document();
+            converter.write(loaded, again);
+            assertTrue(again.toJson().contains(secret), "read back: " + again.toJson());
+        }
     }
 
-    // ---------- Span ----------
+    // ---------- values that look encrypted (#74) ----------
 
     @Test
-    void spanBeforeConvertEncryptsTextAndAfterSaveRestoresIt() {
-        final Span s = new Span();
-        s.setText("alice@example.com");
+    void aValueSomeoneSuppliesThatIsGenuineCiphertextIsEncryptedAndReadBackAsWritten() {
+        // Ciphertext taken from a backup, posted as a comment, must not be decrypted for whoever posted it.
+        final String fromBackup = cipher.encryptField("123-45-6789");
+        final DocumentComment comment = new DocumentComment();
+        comment.setText(fromBackup);
 
-        spanCallbacks.onBeforeConvert(s, "spans");
-        assertEncrypted(s.getText(), "alice@example.com");
-
-        spanCallbacks.onAfterSave(s, new org.bson.Document(), "spans");
-        assertEquals("alice@example.com", s.getText());
-    }
-
-    @Test
-    void spanAfterConvertDecryptsLoadedText() {
-        final Span s = new Span();
-        s.setText(cipher.encryptField("alice@example.com"));
-
-        spanCallbacks.onAfterConvert(s, new org.bson.Document(), "spans");
-        assertEquals("alice@example.com", s.getText());
-    }
-
-    @Test
-    void spanAfterConvertPassesLegacyPlaintextThrough() {
-        final Span s = new Span();
-        s.setText("legacy plaintext span");
-
-        spanCallbacks.onAfterConvert(s, new org.bson.Document(), "spans");
-        assertEquals("legacy plaintext span", s.getText());
+        final org.bson.Document stored = save(comment);
+        assertNotEquals(fromBackup, stored.getString("text"), "encrypted again, not stored as it is");
+        assertEquals(fromBackup, load(DocumentComment.class, stored).getText(), "and read back exactly as written");
     }
 
     @Test
-    void spanWithNullTextRoundTripsCleanly() {
-        // Manual spans created before any text is associated, or auto-created spans where
-        // the text is unset, must not crash any of the lifecycle hooks.
-        final Span s = new Span();
-        s.setText(null);
-        spanCallbacks.onBeforeConvert(s, "spans");
-        spanCallbacks.onAfterSave(s, new org.bson.Document(), "spans");
-        spanCallbacks.onAfterConvert(s, new org.bson.Document(), "spans");
-        assertNull(s.getText());
+    void anIngestedTextThatStartsWithTheMarkerIsEncryptedAndReadBackAsWritten() {
+        final Document d = new Document();
+        d.setOriginalText(SymmetricCipher.FIELD_PREFIX + "not ciphertext at all");
+
+        final org.bson.Document stored = save(d);
+        assertEncrypted(stored.getString("originalText"), "not ciphertext");
+        assertEquals(SymmetricCipher.FIELD_PREFIX + "not ciphertext at all",
+                load(Document.class, stored).getOriginalText());
     }
 
     @Test
-    void spanCallbacksDoNotTouchOtherFields() {
-        // Span has many fields (status, location, exemptionCode, ...). Only the
-        // PII-bearing text field is inside the encryption boundary.
-        final Span s = new Span();
-        s.setId("span-1");
-        s.setDocumentId("doc-1");
-        s.setType("email-address");
-        s.setText("alice@example.com");
-        s.setConfidence(0.95);
-        s.setStatus("APPROVED");
-        s.setStatusChangedBy("alice@x.com");
+    void anUploadThatIsGenuineCiphertextIsEncryptedAgain() {
+        final byte[] fromBackup = cipher.encryptBytes("Jane Roe".getBytes());
+        final PendingUpload upload = new PendingUpload();
+        upload.setContent(fromBackup);
 
-        spanCallbacks.onBeforeConvert(s, "spans");
-
-        assertEquals("span-1", s.getId());
-        assertEquals("doc-1", s.getDocumentId());
-        assertEquals("email-address", s.getType());
-        assertEquals(0.95, s.getConfidence());
-        assertEquals("APPROVED", s.getStatus());
-        assertEquals("alice@x.com", s.getStatusChangedBy());
+        final org.bson.Document stored = save(upload);
+        final Object content = stored.get("content");
+        final byte[] written = content instanceof org.bson.types.Binary b ? b.getData() : (byte[]) content;
+        assertFalse(java.util.Arrays.equals(fromBackup, written));
+        assertArrayEquals(fromBackup, cipher.decryptBytes(written));
     }
 
-    // ---------- DocumentComment ----------
+    // ---------- values that do not decrypt (#74) ----------
 
     @Test
-    void documentCommentBeforeConvertEncryptsTextAndAfterSaveRestoresIt() {
-        final DocumentComment c = new DocumentComment();
-        c.setText("Looked at SSN 123-45-6789 — it's a placeholder.");
+    void aValueThatDoesNotDecryptReadsAsAPlaceholderAndTheRecordCannotBeSaved() {
+        final DocumentComment comment = new DocumentComment();
+        comment.setId("c-1");
+        comment.setText("readable");
+        final org.bson.Document stored = save(comment);
+        // As a comment starting with the marker was stored before #74, or a value under another key.
+        stored.put("text", SymmetricCipher.FIELD_PREFIX + "aGVsbG8gd29ybGQ=");
 
-        commentCallbacks.onBeforeConvert(c, "document_comments");
-        assertEncrypted(c.getText(), "123-45-6789");
+        final DocumentComment loaded = load(DocumentComment.class, stored);
+        assertEquals(PiiFieldEncryption.UNDECRYPTABLE, loaded.getText());
+        assertEquals("c-1", loaded.getId(), "the rest of the record still reads");
 
-        commentCallbacks.onAfterSave(c, new org.bson.Document(), "document_comments");
-        assertEquals("Looked at SSN 123-45-6789 — it's a placeholder.", c.getText());
-    }
+        assertThrows(PiiFieldEncryption.UndecryptableRecordException.class, () -> save(loaded));
+        assertThrows(PiiFieldEncryption.UndecryptableRecordException.class,
+                () -> PiiFieldEncryption.encrypt(cipher, loaded));
 
-    @Test
-    void documentCommentAfterConvertDecryptsLoadedText() {
-        final DocumentComment c = new DocumentComment();
-        c.setText(cipher.encryptField("This patient is sensitive."));
-
-        commentCallbacks.onAfterConvert(c, new org.bson.Document(), "document_comments");
-        assertEquals("This patient is sensitive.", c.getText());
+        // A value that is not base64 at all reads the same way.
+        stored.put("text", SymmetricCipher.FIELD_PREFIX + "not base64!");
+        assertEquals(PiiFieldEncryption.UNDECRYPTABLE, load(DocumentComment.class, stored).getText());
     }
 
     @Test
-    void documentCommentDoesNotMutateActorMetadata() {
-        // Comments carry the actor's email and id alongside the text. Those are not PII
-        // for our purposes (an admin investigation needs to see them in plaintext to
-        // attribute actions). The encryption boundary is just the {@code text} field.
-        final DocumentComment c = new DocumentComment();
-        c.setId("c-1");
-        c.setDocumentId("doc-1");
-        c.setUserEmail("alice@x.com");
-        c.setUserId("u-1");
-        c.setText("Reviewer note");
-
-        commentCallbacks.onBeforeConvert(c, "document_comments");
-        assertEquals("c-1", c.getId());
-        assertEquals("doc-1", c.getDocumentId());
-        assertEquals("alice@x.com", c.getUserEmail());
-        assertEquals("u-1", c.getUserId());
+    void legacyPlaintextReadsUnchanged() {
+        final org.bson.Document stored = new org.bson.Document("text", "legacy plaintext span");
+        assertEquals("legacy plaintext span", load(Span.class, stored).getText());
     }
 
-    // ---------- multi-step interaction ----------
+    // ---------- SQLite's path: encrypt and decrypt the entity in place ----------
 
     @Test
-    void documentRoundTripAcrossSaveThenLoadProducesIdenticalPlaintext() {
-        // Simulate the full lifecycle: caller sets plaintext, save serializes (BeforeConvert
-        // + AfterSave), then a separate read deserializes (AfterConvert). The end-state
-        // entity must equal the start-state entity in PII content.
-        final Document originalView = new Document();
-        originalView.setOriginalText("Patient alice@example.com — DOB 1985-04-12");
-        originalView.setRedactedText("Patient <<EMAIL>> — DOB <<DATE_OF_BIRTH>>");
-        originalView.setFailureMessage(null);
-
-        // Save side: BeforeConvert encrypts, simulate persistence to BSON, AfterSave
-        // restores plaintext on the entity.
-        documentCallbacks.onBeforeConvert(originalView, "documents");
-        // Capture the on-disk representation — what would actually be in the database.
-        final String storedOriginal = originalView.getOriginalText();
-        final String storedRedacted = originalView.getRedactedText();
-        documentCallbacks.onAfterSave(originalView, new org.bson.Document(), "documents");
-
-        assertEquals("Patient alice@example.com — DOB 1985-04-12", originalView.getOriginalText(),
-                "After save, the in-memory entity must surface plaintext to the caller.");
-
-        // The stored form must NOT contain the plaintext anywhere — which is the whole
-        // point of doing this.
-        assertFalse(storedOriginal.contains("alice@example.com"),
-                "On-disk originalText must never contain plaintext PII.");
-        assertFalse(storedOriginal.contains("1985-04-12"));
-        assertFalse(storedRedacted.contains("EMAIL"));
-
-        // Load side: simulate Spring Data turning a fresh BSON document into a new entity
-        // bearing the on-disk ciphertext. AfterConvert decrypts.
-        final Document loadedView = new Document();
-        loadedView.setOriginalText(storedOriginal);
-        loadedView.setRedactedText(storedRedacted);
-        documentCallbacks.onAfterConvert(loadedView, new org.bson.Document(), "documents");
-
-        assertEquals(originalView.getOriginalText(), loadedView.getOriginalText());
-        assertEquals(originalView.getRedactedText(), loadedView.getRedactedText());
+    void encryptingAndDecryptingAnEntityInPlaceRoundTrips() {
+        final DocumentComment comment = new DocumentComment();
+        comment.setText(SymmetricCipher.FIELD_PREFIX + "looks encrypted");
+        PiiFieldEncryption.encrypt(cipher, comment);
+        assertEncrypted(comment.getText(), "looks encrypted");
+        PiiFieldEncryption.decrypt(cipher, comment);
+        assertEquals(SymmetricCipher.FIELD_PREFIX + "looks encrypted", comment.getText());
     }
-
-    // ---------- RedactionCertificate (R2-F6) ----------
-
-    @Test
-    void certificateBeforeConvertEncryptsDocumentFilenameAndEveryOverturnSpanText() {
-        // Without this callback the redaction_certificates collection would store
-        // these fields as plaintext while the source documents/spans collections
-        // hold them encrypted — defeating the at-rest envelope for the
-        // denormalised copy.
-        final RedactionCertificate cert = new RedactionCertificate();
-        cert.setDocumentFilename("mrn-12345678-jane-doe-discharge.pdf");
-        final RedactionCertificate.OverturnEntry o1 = new RedactionCertificate.OverturnEntry();
-        o1.setSpanText("555-12-3456");
-        final RedactionCertificate.OverturnEntry o2 = new RedactionCertificate.OverturnEntry();
-        o2.setSpanText("alice@example.com");
-        cert.setOverturns(java.util.List.of(o1, o2));
-
-        certificateCallbacks.onBeforeConvert(cert, "redaction_certificates");
-
-        assertEncrypted(cert.getDocumentFilename(), "jane-doe");
-        assertEncrypted(cert.getOverturns().get(0).getSpanText(), "555-12-3456");
-        assertEncrypted(cert.getOverturns().get(1).getSpanText(), "alice@example.com");
-    }
-
-    @Test
-    void certificateAfterSaveRestoresPlaintextOnCallerReference() {
-        // Same in-place mutation contract as the Document/Span callbacks: a caller
-        // that does {certificate.save(); certificate.getDocumentFilename();} should
-        // see plaintext, not the ciphertext that BeforeConvert wrote.
-        final RedactionCertificate cert = new RedactionCertificate();
-        cert.setDocumentFilename("mrn-12345678.pdf");
-        final RedactionCertificate.OverturnEntry o = new RedactionCertificate.OverturnEntry();
-        o.setSpanText("555-12-3456");
-        cert.setOverturns(java.util.List.of(o));
-
-        certificateCallbacks.onBeforeConvert(cert, "redaction_certificates");
-        assertEncrypted(cert.getDocumentFilename(), "mrn-12345678");
-        assertEncrypted(cert.getOverturns().get(0).getSpanText(), "555-12-3456");
-
-        final RedactionCertificate returned = certificateCallbacks.onAfterSave(
-                cert, new org.bson.Document(), "redaction_certificates");
-        assertSame(cert, returned);
-        assertEquals("mrn-12345678.pdf", cert.getDocumentFilename());
-        assertEquals("555-12-3456", cert.getOverturns().get(0).getSpanText());
-    }
-
-    @Test
-    void certificateAfterConvertDecryptsValuesLoadedFromMongo() {
-        // Round-trip: encrypt with BeforeConvert, then run AfterConvert (as if Mongo
-        // loaded the stored ciphertext) and assert we get the plaintext back.
-        final RedactionCertificate cert = new RedactionCertificate();
-        cert.setDocumentFilename("mrn-12345678.pdf");
-        final RedactionCertificate.OverturnEntry o = new RedactionCertificate.OverturnEntry();
-        o.setSpanText("555-12-3456");
-        cert.setOverturns(java.util.List.of(o));
-
-        certificateCallbacks.onBeforeConvert(cert, "redaction_certificates");
-
-        // Simulate Mongo loading the ciphertext into a fresh entity instance.
-        final RedactionCertificate loaded = new RedactionCertificate();
-        loaded.setDocumentFilename(cert.getDocumentFilename());
-        final RedactionCertificate.OverturnEntry loadedOverturn = new RedactionCertificate.OverturnEntry();
-        loadedOverturn.setSpanText(cert.getOverturns().get(0).getSpanText());
-        loaded.setOverturns(java.util.List.of(loadedOverturn));
-
-        certificateCallbacks.onAfterConvert(loaded, new org.bson.Document(), "redaction_certificates");
-
-        assertEquals("mrn-12345678.pdf", loaded.getDocumentFilename());
-        assertEquals("555-12-3456", loaded.getOverturns().get(0).getSpanText());
-    }
-
-    @Test
-    void certificateCallbackHandlesNullAndEmptyOverturnsList() {
-        // Defensive: the callback must not NPE when the certificate has no
-        // overturns (no spans were overturned for that document) or when the
-        // overturns list is null (legacy data).
-        final RedactionCertificate empty = new RedactionCertificate();
-        empty.setDocumentFilename(null);
-        empty.setOverturns(null);
-        certificateCallbacks.onBeforeConvert(empty, "redaction_certificates");
-        certificateCallbacks.onAfterSave(empty, new org.bson.Document(), "redaction_certificates");
-        certificateCallbacks.onAfterConvert(empty, new org.bson.Document(), "redaction_certificates");
-
-        final RedactionCertificate noOverturns = new RedactionCertificate();
-        noOverturns.setDocumentFilename("clean.pdf");
-        noOverturns.setOverturns(java.util.List.of());
-        certificateCallbacks.onBeforeConvert(noOverturns, "redaction_certificates");
-        assertEncrypted(noOverturns.getDocumentFilename(), "clean.pdf");
-    }
-
-    // ---------- helpers ----------
 
     private static void assertEncrypted(final String storedValue, final String shouldNotContain) {
         assertTrue(storedValue != null && storedValue.startsWith(SymmetricCipher.FIELD_PREFIX),

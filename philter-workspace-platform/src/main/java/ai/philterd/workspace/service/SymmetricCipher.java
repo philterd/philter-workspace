@@ -109,19 +109,16 @@ public class SymmetricCipher {
      * value written by the encrypted path from a legacy plaintext value written before
      * field encryption was turned on. Returns the input unchanged when it is null or
      * empty (an empty value carries no PII to protect, and serializing it as ciphertext
-     * just makes the database harder to reason about). Idempotent for already-encrypted
-     * input — the prefix is detected and the value is returned as-is, so a stray re-save
-     * of an already-loaded entity does not double-encrypt the field.
+     * just makes the database harder to reason about).
+     *
+     * <p>Any other value is encrypted, whatever it starts with (#74). A value is never taken to be encrypted
+     * already because it carries the marker: the value may be someone's input, and storing it as it is would have
+     * this key decrypt it for them on the next read. The stores encrypt a copy of what they write, so the values
+     * passed here are always plaintext.
      */
     public String encryptField(final String plaintext) {
         if (plaintext == null) return null;
         if (plaintext.isEmpty()) return plaintext;
-        if (plaintext.startsWith(FIELD_PREFIX)) {
-            // Already encrypted — defensive against an entity being saved twice without
-            // an intervening load (the AfterSaveCallback restores plaintext but a misuse
-            // pattern that bypasses the callbacks must still not corrupt the value).
-            return plaintext;
-        }
         return FIELD_PREFIX + encrypt(plaintext);
     }
 
@@ -143,13 +140,11 @@ public class SymmetricCipher {
     /**
      * Encrypt binary content, such as an uploaded file, for at-rest storage: the
      * {@link #FIELD_PREFIX} bytes, then the IV and the GCM ciphertext, as raw bytes. Null and
-     * empty input are returned unchanged. Input that is already this key's ciphertext is
-     * returned as-is; an upload that merely starts with the marker bytes is still encrypted,
-     * since it does not decrypt.
+     * empty input are returned unchanged. Any other input is encrypted, even one that is already this key's
+     * ciphertext, for the reason {@link #encryptField(String)} gives (#74).
      */
     public byte[] encryptBytes(final byte[] plaintext) {
         if (plaintext == null || plaintext.length == 0) return plaintext;
-        if (hasBytesPrefix(plaintext) && tryDecryptBytes(plaintext) != null) return plaintext;
         try {
             final byte[] iv = new byte[IV_BYTES];
             random.nextBytes(iv);

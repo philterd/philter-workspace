@@ -268,7 +268,7 @@ this section applies to the OpenSearch backend.
 
     The OpenSearch index sits **outside** the at-rest encryption boundary
     that covers MongoDB. The
-    [`SymmetricCipher` field-encryption callbacks](../security.md#pii-at-rest-in-mongodb)
+    [`SymmetricCipher` field-encryption callbacks](../security.md#pii-at-rest)
     encrypt PII inside MongoDB before it is written to disk; **no equivalent
     transformation runs on the OpenSearch indexing path.** Documents go
     over the wire to OpenSearch as plaintext and are stored as plaintext.
@@ -331,7 +331,7 @@ even with all of the above applied, **disable full text search** (see
 [Disabling full text search](#disabling-full-text-search) above). With
 the feature off, the document text never leaves MongoDB.
 
-See [Security · PII at rest in MongoDB](../security.md#pii-at-rest-in-mongodb)
+See [Security · PII at rest](../security.md#pii-at-rest)
 for the broader at-rest story; the section there explicitly calls out
 OpenSearch as needing its own encryption.
 

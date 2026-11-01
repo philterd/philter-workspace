@@ -299,7 +299,13 @@ class DetectionRuleServiceTest {
                 span("s1", "Acme:FUZZY", "REJECTED", false), document, ADMIN));
         assertThrows(DetectionRuleService.RuleException.class, () -> service.makeFromSpan(DetectionRule.KIND_NEVER,
                 span("s1", "   ", "REJECTED", false), document, ADMIN));
+        // #74: a value that did not decrypt never reaches Philter's list, where saving the rule would then fail.
+        final DetectionRuleService.RuleException undecryptable = assertThrows(DetectionRuleService.RuleException.class,
+                () -> service.makeFromSpan(DetectionRule.KIND_NEVER,
+                        span("s1", PiiFieldEncryption.UNDECRYPTABLE, "REJECTED", false), document, ADMIN));
+        assertTrue(undecryptable.getMessage().contains("could not be decrypted"), undecryptable.getMessage());
         assertTrue(stored.isEmpty());
+        org.mockito.Mockito.verifyNoInteractions(philter);
     }
 
     @Test

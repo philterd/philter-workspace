@@ -143,6 +143,21 @@ class DocumentFinalizationServiceTest {
     }
 
     @Test
+    void aDocumentWithAValueThatDidNotDecryptIsNotFinalized() {
+        final Document d = approved();
+        when(spans.findByDocumentId("d1")).thenReturn(new ArrayList<>(List.of(
+                span("s1", "ssn", "APPROVED", 13, 24))));
+        spans.findByDocumentId("d1").get(0).setText(PiiFieldEncryption.UNDECRYPTABLE);
+        assertRefused(d, "This document cannot be finalized: some of its values could not be decrypted.");
+
+        final Document undecryptable = approved();
+        undecryptable.setOriginalText(PiiFieldEncryption.UNDECRYPTABLE);
+        assertRefused(undecryptable, "This document cannot be finalized: some of its values could not be decrypted.");
+        verify(documents, never()).save(any());
+        verify(certificates, never()).generate(any(), any());
+    }
+
+    @Test
     void anEmptyDocumentIsFinalizedRatherThanTakenForAClearedOne() {
         final Document empty = approved();
         empty.setOriginalText("");

@@ -16,12 +16,15 @@ import ai.philterd.workspace.model.GeneralSettings;
 import ai.philterd.workspace.model.PendingUpload;
 import ai.philterd.workspace.model.RedactionCertificate;
 import ai.philterd.workspace.model.Span;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.mapping.event.AfterConvertCallback;
-import org.springframework.data.mongodb.core.mapping.event.AfterSaveCallback;
-import org.springframework.data.mongodb.core.mapping.event.BeforeConvertCallback;
+import org.springframework.data.mongodb.core.mapping.event.BeforeSaveCallback;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+import java.util.Map;
 import java.util.function.UnaryOperator;
 
 /**
@@ -52,16 +55,24 @@ import java.util.function.UnaryOperator;
  * </ul>
  *
  * <h3>How it works</h3>
- * <p>{@link #encrypt} and {@link #decrypt} hold the field list and are store-neutral.
- * Each store calls them around its writes and reads; for MongoDB, the callback classes
- * below do so from Spring Data's lifecycle callbacks:
+ * <p>{@link #encrypt} and {@link #decrypt} hold the field list and are store-neutral. The SQLite
+ * store encrypts the entity, serializes it, and decrypts it again in a {@code finally}. For
+ * MongoDB, the callback classes below use Spring Data's lifecycle callbacks:
  * <ul>
- *     <li><strong>BeforeConvertCallback</strong> encrypts just before the entity is turned
- *         into BSON, so Mongo writes ciphertext.</li>
- *     <li><strong>AfterSaveCallback</strong> restores plaintext on the caller's entity, which
- *         would otherwise hold the ciphertext written into it.</li>
+ *     <li><strong>BeforeSaveCallback</strong> encrypts the fields in the BSON document about to
+ *         be written ({@link #encryptStored}), so the caller's entity never holds ciphertext, even
+ *         when the save fails.</li>
  *     <li><strong>AfterConvertCallback</strong> decrypts every entity read back.</li>
  * </ul>
+ * Neither store ever passes ciphertext to {@link SymmetricCipher#encryptField}, which encrypts every
+ * value it is given, so a value someone supplies that looks encrypted is encrypted like any other (#74).
+ *
+ * <h3>Values that do not decrypt</h3>
+ * <p>A stored value with the marker that does not decrypt (a different key, tampering, or a value
+ * stored as it was before #74) reads as {@link #UNDECRYPTABLE}, and a warning names the record, never
+ * the value. One such value no longer makes the list it belongs to unreadable. A record holding
+ * {@link #UNDECRYPTABLE} cannot be saved ({@link UndecryptableRecordException}), so the stored value is
+ * never overwritten.
  *
  * <h3>Backwards compatibility</h3>
  * <p>Pre-existing rows that were written before field encryption was switched on do not
@@ -71,6 +82,32 @@ import java.util.function.UnaryOperator;
  * encrypted form transparently.
  */
 public final class PiiFieldEncryption {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PiiFieldEncryption.class);
+
+    /** What a field reads as when its stored value does not decrypt (#74). */
+    public static final String UNDECRYPTABLE = "[This value could not be decrypted]";
+
+    /** Refuses to save a record that holds {@link #UNDECRYPTABLE}, which would overwrite the value it stands for. */
+    public static final class UndecryptableRecordException extends IllegalStateException {
+        public UndecryptableRecordException(final Object entity) {
+            super("This " + entity.getClass().getSimpleName() + " cannot be saved: one of its values could not be"
+                    + " decrypted, and saving would overwrite it.");
+        }
+    }
+
+    /**
+     * The encrypted fields as paths in the stored document, for {@link #encryptStored}. {@code name[]} is each
+     * element of a list. They are the fields {@link #apply} lists, as the stores name them.
+     */
+    private static final Map<Class<?>, List<String>> STORED_PATHS = Map.of(
+            Document.class, List.of("originalText", "redactedText", "failureMessage",
+                    "caseMetadata.caseNumber", "caseMetadata.filer"),
+            Span.class, List.of("text"),
+            GeneralSettings.class, List.of("opensearchPassword"),
+            DocumentComment.class, List.of("text"),
+            DetectionRule.class, List.of("text"),
+            RedactionCertificate.class, List.of("documentFilename", "overturns[].spanText"));
 
     private PiiFieldEncryption() {}
 
@@ -83,16 +120,106 @@ public final class PiiFieldEncryption {
             pu.setContent(cipher.encryptBytes(pu.getContent()));
             return;
         }
+        refuseUndecryptable(entity);
         apply(entity, cipher::encryptField);
     }
 
-    /** Decrypt the PII fields of {@code entity} in place. Every store calls this after reading or writing an entity. */
+    /**
+     * Decrypt the PII fields of {@code entity} in place. Every store calls this after reading or writing an entity.
+     * A field that does not decrypt reads as {@link #UNDECRYPTABLE}; an upload's content that does not decrypt
+     * still fails, so its ingest fails rather than redacting a placeholder.
+     */
     public static void decrypt(final SymmetricCipher cipher, final Object entity) {
         if (entity instanceof PendingUpload pu) {
             pu.setContent(cipher.decryptBytes(pu.getContent()));
             return;
         }
-        apply(entity, cipher::decryptField);
+        apply(entity, stored -> {
+            try {
+                return cipher.decryptField(stored);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                // The record, never the value: it may be someone's input.
+                LOGGER.warn("A value in {} {} could not be decrypted; it reads as a placeholder and the record cannot"
+                        + " be saved.", entity.getClass().getSimpleName(), idOf(entity));
+                return UNDECRYPTABLE;
+            }
+        });
+    }
+
+    /**
+     * Whether a field of {@code entity} read as {@link #UNDECRYPTABLE}. Anything that copies a record's values out of
+     * Philter Workspace, such as an export or a delivery, checks this first, so the placeholder is never written out.
+     */
+    public static boolean holdsUndecryptable(final Object entity) {
+        final boolean[] found = {false};
+        apply(entity, value -> {
+            found[0] |= UNDECRYPTABLE.equals(value);
+            return value;
+        });
+        return found[0];
+    }
+
+    /** Throws {@link UndecryptableRecordException} when {@code entity} holds {@link #UNDECRYPTABLE}. */
+    private static void refuseUndecryptable(final Object entity) {
+        apply(entity, value -> {
+            if (UNDECRYPTABLE.equals(value)) {
+                throw new UndecryptableRecordException(entity);
+            }
+            return value;
+        });
+    }
+
+    private static String idOf(final Object entity) {
+        if (entity instanceof Document d) return d.getId();
+        if (entity instanceof Span sp) return sp.getId();
+        if (entity instanceof DocumentComment c) return c.getId();
+        if (entity instanceof DetectionRule r) return r.getId();
+        if (entity instanceof RedactionCertificate rc) return rc.getId();
+        if (entity instanceof GeneralSettings g) return g.getId();
+        return "";
+    }
+
+    /**
+     * Encrypt the PII fields of {@code stored}, the MongoDB document about to be written for an entity of
+     * {@code type}, leaving the entity itself in plaintext. Refuses an entity holding {@link #UNDECRYPTABLE}.
+     */
+    public static void encryptStored(final SymmetricCipher cipher, final Object entity,
+                                     final org.bson.Document stored) {
+        if (entity instanceof PendingUpload) {
+            final Object content = stored.get("content");
+            if (content instanceof org.bson.types.Binary binary) {
+                stored.put("content", new org.bson.types.Binary(cipher.encryptBytes(binary.getData())));
+            } else if (content instanceof byte[] bytes) {
+                stored.put("content", cipher.encryptBytes(bytes));
+            }
+            return;
+        }
+        final List<String> paths = STORED_PATHS.get(entity.getClass());
+        if (paths == null) return;
+        refuseUndecryptable(entity);
+        for (String path : paths) {
+            encryptPath(cipher, stored, path.split("\\."), 0);
+        }
+    }
+
+    private static void encryptPath(final SymmetricCipher cipher, final org.bson.Document node, final String[] path,
+                                    final int i) {
+        final boolean each = path[i].endsWith("[]");
+        final String key = each ? path[i].substring(0, path[i].length() - 2) : path[i];
+        final Object value = node.get(key);
+        if (i == path.length - 1) {
+            if (value instanceof String text) {
+                node.put(key, cipher.encryptField(text));
+            }
+        } else if (each && value instanceof List<?> list) {
+            for (Object element : list) {
+                if (element instanceof org.bson.Document child) {
+                    encryptPath(cipher, child, path, i + 1);
+                }
+            }
+        } else if (value instanceof org.bson.Document child) {
+            encryptPath(cipher, child, path, i + 1);
+        }
     }
 
     private static void apply(final Object entity, final UnaryOperator<String> f) {
@@ -123,12 +250,11 @@ public final class PiiFieldEncryption {
     }
 
     /**
-     * MongoDB lifecycle callbacks around {@link #encrypt} and {@link #decrypt}: encrypt before
-     * the entity is turned into BSON, then restore plaintext on the caller's entity after the
-     * save, and decrypt every entity read back.
+     * MongoDB lifecycle callbacks: encrypt the BSON document about to be written
+     * ({@link #encryptStored}), leaving the caller's entity in plaintext, and decrypt every
+     * entity read back ({@link #decrypt}).
      */
-    abstract static class MongoCallbacks<T>
-            implements BeforeConvertCallback<T>, AfterSaveCallback<T>, AfterConvertCallback<T> {
+    abstract static class MongoCallbacks<T> implements BeforeSaveCallback<T>, AfterConvertCallback<T> {
 
         private final SymmetricCipher cipher;
 
@@ -137,14 +263,8 @@ public final class PiiFieldEncryption {
         }
 
         @Override
-        public T onBeforeConvert(final T entity, final String collection) {
-            encrypt(cipher, entity);
-            return entity;
-        }
-
-        @Override
-        public T onAfterSave(final T entity, final org.bson.Document document, final String collection) {
-            decrypt(cipher, entity);
+        public T onBeforeSave(final T entity, final org.bson.Document document, final String collection) {
+            encryptStored(cipher, entity, document);
             return entity;
         }
 

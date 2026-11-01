@@ -344,6 +344,29 @@ turned on continues to read normally. The first save of any such row
 re-writes the affected field as ciphertext. There is no offline migration —
 encryption rolls forward as documents are touched.
 
+### Values that look encrypted, and values that do not decrypt
+
+The prefix only tells a read what to decrypt; a write never trusts it. Every
+value is encrypted when it is saved, whatever it starts with, so a comment,
+an ingested text, or an upload that starts with `enc:v1:`, or that is
+ciphertext copied from a backup, is stored encrypted and reads back exactly
+as it was written. Philter Workspace never decrypts a value on behalf of the
+person who supplied it.
+
+A stored value that has the prefix but does not decrypt (written under a
+different key, tampered with, or a comment that started with `enc:v1:` saved
+by an earlier version) reads as `[This value could not be decrypted]`, and the
+log names the record type and id, never the value. The rest of the record,
+and the list it belongs to, still read. A record holding that placeholder
+cannot be saved, so the stored value is never overwritten, and the
+placeholder is never copied out: such a document is not finalized, exported,
+or delivered (an export counts it as failed), and no detection rule is made
+from such a span.
+
+The OpenSearch password is in the general settings, which every section of
+**Admin → General** saves. If it does not decrypt, enter it again or clear it
+under **Full text search**; until then no section of that page can be saved.
+
 ### What is **not** encrypted
 
 The following fields are **not** part of the at-rest encryption boundary:
@@ -370,7 +393,9 @@ The following fields are **not** part of the at-rest encryption boundary:
 The same `philter-workspace.crypto.secret` that protects credentials and API keys also
 protects PII at rest. Losing the key means **losing access to every
 encrypted field** — back it up at the same operational tier as your database
-backups. Rotating the key requires re-encrypting every existing row; this is
+backups. Starting with a different key shows every encrypted field as
+`[This value could not be decrypted]`, and records holding one cannot be saved
+until the right key is restored. Rotating the key requires re-encrypting every existing row; this is
 intentionally out-of-band today (no UI affordance) so that a sloppy rotation
 does not leave half the corpus unreadable.
 

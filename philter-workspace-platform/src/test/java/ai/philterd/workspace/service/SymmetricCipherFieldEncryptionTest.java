@@ -71,15 +71,13 @@ class SymmetricCipherFieldEncryptionTest {
     }
 
     @Test
-    void encryptFieldIsIdempotent() {
-        // If a save path runs twice on the same entity without an intervening decrypt
-        // (a misuse pattern), the second encrypt must NOT double-encrypt. The marker
-        // prefix lets encryptField detect the already-encrypted state and skip.
+    void encryptFieldEncryptsAValueThatIsAlreadyCiphertext() {
+        // #74: the marker is not trusted on the way in. Ciphertext someone supplies is encrypted like any other
+        // value, so reading it back gives what they wrote, never what it decrypts to.
         final String once = cipher.encryptField("hello world");
         final String twice = cipher.encryptField(once);
-        assertEquals(once, twice,
-                "Re-encrypting an already-encrypted value must be a no-op, not produce double-encryption.");
-        assertEquals("hello world", cipher.decryptField(twice));
+        assertNotEquals(once, twice);
+        assertEquals(once, cipher.decryptField(twice));
     }
 
     @Test
@@ -207,9 +205,12 @@ class SymmetricCipherFieldEncryptionTest {
     }
 
     @Test
-    void encryptingThisKeysCiphertextAgainChangesNothing() {
+    void encryptingThisKeysCiphertextAgainEncryptsIt() {
+        // #74, as for fields: an upload that is this key's ciphertext is not decrypted for whoever uploaded it.
         final byte[] stored = cipher.encryptBytes("Jane Roe".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        org.junit.jupiter.api.Assertions.assertArrayEquals(stored, cipher.encryptBytes(stored));
+        final byte[] again = cipher.encryptBytes(stored);
+        assertNotEquals(stored.length, again.length);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(stored, cipher.decryptBytes(again));
     }
 
     @Test

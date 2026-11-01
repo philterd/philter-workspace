@@ -104,8 +104,17 @@ public class DocumentFinalizationService {
                     + "been cleared by a finalization policy and cannot be finalized.");
         }
 
+        final List<Span> spans = spanRepository.findByDocumentId(document.getId());
+        // A value that did not decrypt would be refused when the certificate is saved, after the document was
+        // already finalized (#74), so refuse before changing anything.
+        if (PiiFieldEncryption.UNDECRYPTABLE.equals(originalText)
+                || spans.stream().anyMatch(sp -> PiiFieldEncryption.UNDECRYPTABLE.equals(sp.getText()))) {
+            throw new FinalizationRefused(HttpStatus.CONFLICT, "This document cannot be finalized: some of its"
+                    + " values could not be decrypted.");
+        }
+
         final String previous = document.getStatus();
-        final String redacted = render(originalText, spanRepository.findByDocumentId(document.getId()));
+        final String redacted = render(originalText, spans);
         document.changeStatus("FINALIZED");
         // Kept on the document so Download and delivery still work after a finalization policy clears the source.
         document.setRedactedText(redacted);

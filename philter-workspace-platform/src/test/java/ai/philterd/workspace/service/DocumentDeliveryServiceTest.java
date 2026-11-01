@@ -149,6 +149,23 @@ class DocumentDeliveryServiceTest {
     }
 
     @Test
+    void aDocumentWithAValueThatDidNotDecryptIsNotDelivered() throws Exception {
+        // #74: its output could be the placeholder, and it cannot be saved to record an attempt.
+        assertTrue(service.queue(document, batch, "lead@example.com"));
+        document.setRedactedText(PiiFieldEncryption.UNDECRYPTABLE);
+        org.mockito.Mockito.clearInvocations(documents);
+
+        service.deliverDue();
+
+        try (Stream<Path> all = Files.walk(dir)) {
+            assertTrue(all.filter(Files::isRegularFile).noneMatch(f -> f.toString().contains("_redacted")),
+                    "nothing is written");
+        }
+        assertEquals("PENDING", document.getDeliveryStatus());
+        verify(documents, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
     void aFailedWriteIsRetriedWithGrowingDelaysThenReportedAndTheOutputIsKept() throws Exception {
         destination.setDirectoryPath(dir.resolve("missing").toString());
         service.queue(document, batch, "lead@example.com");

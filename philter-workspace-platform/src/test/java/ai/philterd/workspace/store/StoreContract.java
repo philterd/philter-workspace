@@ -582,6 +582,59 @@ public abstract class StoreContract {
     }
 
     @Test
+    void valuesThatLookEncryptedAreEncryptedAndReadBackAsWritten() {
+        // #74: a comment or an ingested text starting with the marker is someone's input, not ciphertext.
+        final String looksEncrypted = "enc:v1:aGVsbG8gd29ybGQgdGhpcyBpcyBub3QgY2lwaGVydGV4dA==";
+        final DocumentCommentRepository comments = repository(DocumentCommentRepository.class);
+        final DocumentComment comment = new DocumentComment();
+        comment.setDocumentId("d-74");
+        comment.setText(looksEncrypted);
+        comments.save(comment);
+        assertFalse(raw(DocumentComment.class, comment.getId()).contains(looksEncrypted.substring(7)));
+        assertEquals(looksEncrypted, comments.findById(comment.getId()).orElseThrow().getText());
+
+        final DocumentRepository docs = repository(DocumentRepository.class);
+        final Document d = document("b", "PENDING", "f.txt", LocalDateTime.now());
+        d.setOriginalText(looksEncrypted);
+        docs.save(d);
+        assertEquals(looksEncrypted, docs.findById(d.getId()).orElseThrow().getOriginalText());
+    }
+
+    @Test
+    void aValueThatDoesNotDecryptLeavesTheRestOfTheListReadableAndCannotBeSaved() {
+        final DocumentCommentRepository comments = repository(DocumentCommentRepository.class);
+        final List<String> ids = new ArrayList<>();
+        for (String text : List.of("first", "second")) {
+            final DocumentComment c = new DocumentComment();
+            c.setDocumentId("d-bad");
+            c.setText(text);
+            c.setTimestamp(java.time.Instant.now());
+            comments.save(c);
+            ids.add(c.getId());
+        }
+        // As a comment starting with the marker was stored before #74.
+        setField(DocumentComment.class, ids.get(0), "text", "enc:v1:aGVsbG8gd29ybGQ=");
+
+        final List<DocumentComment> read = comments.findByDocumentIdOrderByTimestampDesc("d-bad");
+        assertEquals(2, read.size());
+        final DocumentComment bad = read.stream().filter(c -> c.getId().equals(ids.get(0))).findFirst().orElseThrow();
+        assertEquals(ai.philterd.workspace.service.PiiFieldEncryption.UNDECRYPTABLE, bad.getText());
+        assertEquals("second", read.stream().filter(c -> c.getId().equals(ids.get(1))).findFirst().orElseThrow()
+                .getText());
+
+        assertThrows(ai.philterd.workspace.service.PiiFieldEncryption.UndecryptableRecordException.class,
+                () -> comments.save(bad));
+        assertEquals("enc:v1:aGVsbG8gd29ybGQ=", rawText(DocumentComment.class, ids.get(0)), "the stored value is kept");
+    }
+
+    /** The stored value of the {@code text} field. */
+    private String rawText(final Class<?> type, final String id) {
+        final String raw = raw(type, id);
+        final int start = raw.indexOf("enc:v1:");
+        return raw.substring(start, raw.indexOf('"', start));
+    }
+
+    @Test
     void everyOtherPiiFieldIsEncryptedAtRest() {
         final DocumentComment comment = new DocumentComment();
         comment.setDocumentId("d1");

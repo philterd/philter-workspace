@@ -315,6 +315,11 @@ public class BatchExportService {
                     skipped++;
                     continue;
                 }
+                if (undecryptable(doc, spans)) {
+                    failed++;
+                    recordFailureMessage(job, doc.getId(), UNDECRYPTABLE_MESSAGE);
+                    continue;
+                }
                 final String body = bioRenderer.render(doc, spans);
                 if (body.isEmpty()) {
                     // Document with no source text — count as failed so the operator
@@ -420,6 +425,11 @@ public class BatchExportService {
                     final List<Span> spans = spanRepository.findByDocumentId(doc.getId());
                     if (job.isExcludeThresholdAccepted() && hasThresholdAccepted(spans)) {
                         skipped++;
+                        continue;
+                    }
+                    if (undecryptable(doc, spans)) {
+                        failed++;
+                        recordFailureMessage(job, doc.getId(), UNDECRYPTABLE_MESSAGE);
                         continue;
                     }
                     final String line;
@@ -571,6 +581,13 @@ public class BatchExportService {
             default:
                 return DestinationWriter.Result.failure("Unsupported destination kind: " + kind);
         }
+    }
+
+    private static final String UNDECRYPTABLE_MESSAGE = "Document has values that could not be decrypted.";
+
+    /** Whether the document or a span read as the undecryptable placeholder, which must not be exported (#74). */
+    private static boolean undecryptable(final Document doc, final List<Span> spans) {
+        return PiiFieldEncryption.holdsUndecryptable(doc) || spans.stream().anyMatch(PiiFieldEncryption::holdsUndecryptable);
     }
 
     private static String filenameFor(final Batch batch, final Format format) {

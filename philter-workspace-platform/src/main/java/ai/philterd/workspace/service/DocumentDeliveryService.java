@@ -177,6 +177,12 @@ public class DocumentDeliveryService {
     }
 
     void attempt(final Document document) {
+        if (PiiFieldEncryption.holdsUndecryptable(document)) {
+            // Its output could be the placeholder, and the document cannot be saved to record a failure (#74), so it
+            // stays pending, and is logged on each poll, until its values decrypt again.
+            LOG.warn("Document {} has values that could not be decrypted; it is not delivered.", document.getId());
+            return;
+        }
         final Batch batch = document.getBatchId() == null ? null
                 : batchRepository.findById(document.getBatchId()).orElse(null);
         final int attempt = document.getDeliveryAttempts() + 1;

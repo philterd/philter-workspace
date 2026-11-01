@@ -258,7 +258,8 @@ public class DetectionRuleService {
                 return;
             }
             final String normalized = normalize(span.getText());
-            if (normalized.isEmpty() || normalized.length() > MAX_TERM_LENGTH || normalized.endsWith(FUZZY_SUFFIX)) {
+            if (normalized.isEmpty() || normalized.length() > MAX_TERM_LENGTH || normalized.endsWith(FUZZY_SUFFIX)
+                    || PiiFieldEncryption.UNDECRYPTABLE.equals(span.getText())) {
                 return;
             }
             final String key = audit.hashForAudit(normalized);
@@ -357,6 +358,10 @@ public class DetectionRuleService {
         final String text = raw == null ? "" : raw.trim();
         if (text.isEmpty()) {
             throw new RuleException("The span has no text to make a rule from.");
+        }
+        // Checked before Philter's list is written, since saving the rule would then be refused (#74).
+        if (PiiFieldEncryption.UNDECRYPTABLE.equals(text)) {
+            throw new RuleException("The span's value could not be decrypted, so no rule can be made from it.");
         }
         if (text.length() > MAX_TERM_LENGTH) {
             throw new RuleException("Philter's lists take values of up to " + MAX_TERM_LENGTH + " characters, and "

@@ -153,6 +153,28 @@ class BatchExportThresholdAcceptedTest {
         assertTrue(written.isEmpty());
     }
 
+    @Test
+    void aDocumentWithAValueThatDidNotDecryptIsNotExported() {
+        // #74: the placeholder must never be written out as a document's text or a span's.
+        final Document unreadable = doc("unreadable");
+        unreadable.setOriginalText(PiiFieldEncryption.UNDECRYPTABLE);
+        final Span unreadableSpan = span("APPROVED", "rev@example.com");
+        unreadableSpan.setText(PiiFieldEncryption.UNDECRYPTABLE);
+        when(spanRepository.findByDocumentId("span-unreadable")).thenReturn(List.of(unreadableSpan));
+        when(documentRepository.findByBatchIdAndStatus(eq("b1"), eq("APPROVED"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(doc("decided"), unreadable, doc("span-unreadable"))));
+
+        for (String format : List.of("JSONL", "PHEYE", "BIO")) {
+            written.clear();
+            job.setStatus(BackgroundJob.STATUS_RUNNING);
+            job.setFailedDocuments(0);
+            run(format, false);
+            assertEquals(1, written.size(), format + ": " + written);
+            assertTrue(written.stream().noneMatch(l -> l.contains(PiiFieldEncryption.UNDECRYPTABLE)), format);
+            assertEquals(2, job.getFailedDocuments(), format);
+        }
+    }
+
     private void run(final String format, final boolean exclude) {
         job.setDataFormat(format);
         job.setExcludeThresholdAccepted(exclude);
