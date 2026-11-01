@@ -289,6 +289,30 @@ public class AuthorizationIntegrationTest extends WebMvcSliceMocks {
     }
 
     @Test
+    void cookieAuthRejectedOnPercentEncodedFormsOfBearerOnlyApiPaths() throws Exception {
+        // #81: Spring MVC dispatches on the decoded path, so an encoded letter must not slip past the filter.
+        final String[][] requests = {
+                {"POST", "/api/v1/%69ngest"},
+                {"POST", "/api/v1/ingest%2F"},
+                {"POST", "/api/v1/%73earch"},
+                {"POST", "/api/v1/documents/d1/%66inalize"},
+                {"POST", "/api/v1/documents/d1/finaliz%65"},
+                {"GET", "/api/v1/documents/d1/%61udit"},
+                {"GET", "/api/v1/%64ocuments/d1/audit"},
+        };
+        for (String[] r : requests) {
+            final java.net.URI uri = java.net.URI.create(r[1]);
+            final org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request =
+                    "GET".equals(r[0]) ? get(uri) : post(uri);
+            final int status = mockMvc.perform(request.contentType("application/json").content("{\"q\":\"hi\"}")
+                            .with(signedIn("a", "ADMIN")).with(csrf()))
+                    .andReturn().getResponse().getStatus();
+            // An encoded slash never reaches the filter: Spring Security's firewall refuses it with 400.
+            org.junit.jupiter.api.Assertions.assertEquals(r[1].contains("%2F") ? 400 : 401, status, r[0] + " " + r[1]);
+        }
+    }
+
+    @Test
     void cookieAuthAllowedOnBrowserUiApiPaths() throws Exception {
         // Browser-UI endpoints accept the session cookie. /api/v1/queue and
         // /api/v1/batches are called by the Documents-to-Review page; if the

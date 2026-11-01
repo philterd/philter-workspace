@@ -441,9 +441,11 @@ CSRF protection is enabled for HTML form posts and disabled for the
   `POST /api/v1/documents/{id}/finalize`, `GET /api/v1/documents/{id}/audit`)
   are Bearer-only: the `ApiSessionRejectingFilter` drops session-cookie
   authentication for these paths so they can only be reached with an
-  `Authorization: Bearer <api-key>` header. This is the canonical defense
-  against a logged-in admin being CSRF-pushed into ingesting fake content
-  or exporting redacted data through their browser.
+  `Authorization: Bearer <api-key>` header. The filter matches the decoded
+  path with the same path patterns the request is dispatched by, so a
+  percent-encoded form of one of these paths is treated the same. This is the
+  canonical defense against a logged-in admin being CSRF-pushed into ingesting
+  fake content or exporting redacted data through their browser.
 
 There is no CORS configuration shipped — if you front Philter Workspace with a
 different origin, configure CORS in your reverse proxy or extend

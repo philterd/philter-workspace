@@ -204,6 +204,34 @@ class ApiSessionRejectingFilterTest {
         verify(chain).doFilter(request, response);
     }
 
+    // ----- Decoded paths (#81) -----
+
+    @Test
+    void stripsSessionAuthOnPercentEncodedFormsOfEachBearerOnlyPath() throws Exception {
+        // Spring MVC dispatches each of these to the endpoint the plain path reaches.
+        for (String uri : List.of("/api/v1/%69ngest", "/api/v1/ingest/", "/api/v1/%73earch", "/api/v1/sear%63h",
+                "/api/v1/documents/doc-123/%66inalize", "/api/v1/%64ocuments/doc-123/finalize",
+                "/api/v1/documents/doc-123/%61udit", "/api/v1/documents/doc-123/audit/")) {
+            SecurityContextHolder.getContext().setAuthentication(sessionAuth("user@x.com"));
+
+            filter.doFilter(req(uri), new MockHttpServletResponse(), mock(FilterChain.class));
+
+            assertNull(SecurityContextHolder.getContext().getAuthentication(), uri);
+        }
+    }
+
+    @Test
+    void preservesSessionAuthOnPathsThatOnlyLookLikeBearerOnlyOnes() throws Exception {
+        for (String uri : List.of("/api/v1/searchable", "/api/v1/ingested", "/api/v1/documents/doc-123/audit-trail",
+                "/api/v1/documents/doc-123/finalized", "/api/v1/documents/doc-123/spans")) {
+            SecurityContextHolder.getContext().setAuthentication(sessionAuth("user@x.com"));
+
+            filter.doFilter(req(uri), new MockHttpServletResponse(), mock(FilterChain.class));
+
+            assertNotNull(SecurityContextHolder.getContext().getAuthentication(), uri);
+        }
+    }
+
     // ----- Context-path stripping -----
 
     @Test

@@ -15,6 +15,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -52,25 +55,16 @@ import java.io.IOException;
 public class ApiSessionRejectingFilter extends OncePerRequestFilter {
 
     /**
-     * Path prefixes that must be Bearer-only. Anything matching these (anchored on
-     * a slash boundary so {@code /api/v1/searchable} doesn't accidentally match)
-     * rejects session auth.
+     * The Bearer-only paths. They are matched on the decoded path with the same path patterns Spring MVC dispatches
+     * with, so a percent-encoded form of a path, such as {@code /api/v1/%73earch}, is matched like the path itself
+     * (#81). Each ends in {@code /**}, which also matches the path alone and with a trailing slash.
      */
-    private static final String[] BEARER_ONLY_PREFIXES = {
-            "/api/v1/ingest",
-            "/api/v1/search",
-    };
-
-    /**
-     * Method+path pairs that must be Bearer-only. Used for endpoints that share a
-     * URL prefix with browser-UI endpoints (e.g. {@code /api/v1/documents/{id}/finalize}
-     * lives under {@code /api/v1/documents/} which the browser UI also uses for span
-     * reads). Matched as {@code (method, suffix)} on the request URI.
-     */
-    private static final String[] BEARER_ONLY_DOCUMENT_SUFFIXES = {
-            "/finalize",      // POST /api/v1/documents/{id}/finalize  (Export)
-            "/audit",         // GET  /api/v1/documents/{id}/audit     (Export)
-    };
+    private static final RequestMatcher BEARER_ONLY = new OrRequestMatcher(
+            PathPatternRequestMatcher.pathPattern("/api/v1/ingest/**"),
+            PathPatternRequestMatcher.pathPattern("/api/v1/search/**"),
+            // Export endpoints that share /api/v1/documents/ with browser-UI document endpoints.
+            PathPatternRequestMatcher.pathPattern("/api/v1/documents/*/finalize/**"),
+            PathPatternRequestMatcher.pathPattern("/api/v1/documents/*/audit/**"));
 
     @Override
     protected void doFilterInternal(final HttpServletRequest request,
@@ -90,29 +84,6 @@ public class ApiSessionRejectingFilter extends OncePerRequestFilter {
     }
 
     private static boolean isBearerOnly(final HttpServletRequest request) {
-        final String path = pathWithoutContext(request);
-        if (path == null) return false;
-        for (String prefix : BEARER_ONLY_PREFIXES) {
-            if (path.equals(prefix)
-                    || path.startsWith(prefix + "/")
-                    || path.startsWith(prefix + "?")) {
-                return true;
-            }
-        }
-        if (path.startsWith("/api/v1/documents/")) {
-            for (String suffix : BEARER_ONLY_DOCUMENT_SUFFIXES) {
-                if (path.endsWith(suffix)) return true;
-            }
-        }
-        return false;
-    }
-
-    private static String pathWithoutContext(final HttpServletRequest request) {
-        final String uri = request.getRequestURI();
-        if (uri == null) return null;
-        final String contextPath = request.getContextPath();
-        return (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath))
-                ? uri.substring(contextPath.length())
-                : uri;
+        return BEARER_ONLY.matches(request);
     }
 }
