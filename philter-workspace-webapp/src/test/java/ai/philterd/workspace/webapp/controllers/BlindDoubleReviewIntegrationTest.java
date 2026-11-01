@@ -684,7 +684,9 @@ class BlindDoubleReviewIntegrationTest {
                 new ai.philterd.workspace.service.DocumentFinalizationService(documentRepository, spanRepository,
                         batchRepository, finalizationPolicyRepository, redactionCertificateService, documentLockService,
                         new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService),
-                        openSearchIndexService, mock(ai.philterd.workspace.service.DocumentDeliveryService.class),
+                        new ai.philterd.workspace.service.SourceRetentionService(documentRepository, spanRepository,
+                                org.mockito.Mockito.mock(ai.philterd.workspace.repository.PendingUploadRepository.class),
+                                batchRepository, finalizationPolicyRepository, openSearchIndexService, auditLogService), mock(ai.philterd.workspace.service.DocumentDeliveryService.class),
                         auditLogService));
     }
 

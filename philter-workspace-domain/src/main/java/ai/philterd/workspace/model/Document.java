@@ -98,6 +98,13 @@ public class Document {
     private String deliveryDestination;
     private Instant deliveryNextAttemptAt;
     private Instant deliveredAt;
+    /** When the document was finalized. A delayed finalization policy counts from here (#68). */
+    private Instant finalizedAt;
+    /**
+     * When a finalization policy cleared the original text, spans, and index entry, or null while they are kept
+     * (#68).
+     */
+    private Instant sourceClearedAt;
     /** Who finalized the document, or asked for the delivery to be retried. */
     private String deliveryRequestedBy;
     /**
@@ -399,6 +406,12 @@ public class Document {
 
     public Instant getDeliveryNextAttemptAt() { return deliveryNextAttemptAt; }
     public void setDeliveryNextAttemptAt(final Instant deliveryNextAttemptAt) { this.deliveryNextAttemptAt = deliveryNextAttemptAt; }
+
+    public Instant getFinalizedAt() { return finalizedAt; }
+    public void setFinalizedAt(final Instant finalizedAt) { this.finalizedAt = finalizedAt; }
+
+    public Instant getSourceClearedAt() { return sourceClearedAt; }
+    public void setSourceClearedAt(final Instant sourceClearedAt) { this.sourceClearedAt = sourceClearedAt; }
 
     public Instant getDeliveredAt() { return deliveredAt; }
     public void setDeliveredAt(final Instant deliveredAt) { this.deliveredAt = deliveredAt; }

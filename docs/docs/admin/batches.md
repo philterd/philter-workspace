@@ -39,6 +39,35 @@ non-admin POSTs as a defense in depth. When no user groups exist yet, the
 button is rendered disabled with a message reminding the operator to create
 a group first.
 
+## Finalization policies
+
+A batch's finalization policy, chosen when it is created and managed under
+**Policies → Finalization**, decides what happens to a document's original
+once the document is finalized:
+
+| Option | When the original is deleted |
+| --- | --- |
+| Delete original documents immediately after finalizing | At finalization. |
+| Delete original documents after 48 hours | 48 hours after finalization. |
+| Delete original documents after X days | The policy's number of days after finalization. |
+| Keep original documents (never delete them) | Never. |
+
+Deleting the original clears the document's original text and stored file,
+its spans (which hold the detected values), its full-text index entry, and any
+copy kept for retrying redaction. The document record, its redacted text (so
+**Download** keeps working), and its certificate of redaction are kept. Each
+deletion is recorded in the audit log as `FINALIZATION_POLICY_APPLIED` with
+`SOURCE_CLEARED`.
+
+The two delayed options are carried out by a job that runs every 15 minutes
+(`philter-workspace.finalization.retention-poll-millis`, default `900000`), so
+a document is deleted within 15 minutes of its time. The job uses each batch's
+policy when it runs, so a document whose batch has since moved to **Keep
+original documents** is kept, and one whose batch moved to a delete option is
+deleted by that option's time. It counts from when each document was finalized,
+so a document whose time passed while Philter Workspace was not running is
+deleted on the next run.
+
 ## Per-row actions
 
 Each batch row has:

@@ -674,6 +674,31 @@ public abstract class StoreContract {
     }
 
     @Test
+    void finalizedDocumentsAwaitingClearingAreFoundIncludingOnesSavedBeforeTheField() {
+        // #68: a document whose source has not been cleared has no sourceClearedAt, including one saved before the
+        // field existed.
+        final DocumentRepository docs = repository(DocumentRepository.class);
+        final Document awaiting = document("b-68", "FINALIZED", "a.txt", LocalDateTime.now());
+        awaiting.setFinalizedAt(java.time.Instant.parse("2026-10-30T12:00:00Z"));
+        docs.save(awaiting);
+        final Document cleared = document("b-68", "FINALIZED", "b.txt", LocalDateTime.now());
+        cleared.setSourceClearedAt(java.time.Instant.parse("2026-10-31T12:00:00Z"));
+        docs.save(cleared);
+        docs.save(document("b-68", "APPROVED", "c.txt", LocalDateTime.now()));
+        final Document legacy = document("b-68", "FINALIZED", "d.txt", LocalDateTime.now());
+        docs.save(legacy);
+        removeField(Document.class, legacy.getId(), "sourceClearedAt");
+
+        final java.util.Set<String> found = new java.util.HashSet<>();
+        for (Document d : docs.findByBatchIdAndStatusAndSourceClearedAtIsNull("b-68", "FINALIZED")) {
+            found.add(d.getId());
+        }
+        assertEquals(java.util.Set.of(awaiting.getId(), legacy.getId()), found);
+        assertEquals(java.time.Instant.parse("2026-10-30T12:00:00Z"),
+                docs.findById(awaiting.getId()).orElseThrow().getFinalizedAt());
+    }
+
+    @Test
     void credentialsReasonsAndIngestErrorsAreEncryptedAtRest() {
         // #77: the SMTP password.
         final ai.philterd.workspace.model.NotificationSettings smtp = new ai.philterd.workspace.model.NotificationSettings();

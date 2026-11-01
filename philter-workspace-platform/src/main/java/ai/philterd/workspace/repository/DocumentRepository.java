@@ -18,6 +18,8 @@ import java.util.List;
 
 @Repository
 public interface DocumentRepository extends WorkspaceRepository<Document, String> {
+    /** A batch's documents in {@code status} whose source a finalization policy has not cleared yet (#68). */
+    List<Document> findByBatchIdAndStatusAndSourceClearedAtIsNull(String batchId, String status);
     Page<Document> findByStatus(String status, Pageable pageable);
     Page<Document> findByBatchId(String batchId, Pageable pageable);
     Page<Document> findByBatchIdAndStatus(String batchId, String status, Pageable pageable);

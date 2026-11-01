@@ -129,7 +129,9 @@ class ReviewViewControllerTest {
                 generalSettingsService, deliveryService, changeGuard,
                 new ai.philterd.workspace.service.DocumentFinalizationService(documentRepository, spanRepository,
                         batchRepository, finalizationPolicyRepository, redactionCertificateService, documentLockService,
-                        changeGuard, openSearchIndexService, deliveryService, auditLogService));
+                        changeGuard, new ai.philterd.workspace.service.SourceRetentionService(documentRepository, spanRepository,
+                                org.mockito.Mockito.mock(ai.philterd.workspace.repository.PendingUploadRepository.class),
+                                batchRepository, finalizationPolicyRepository, openSearchIndexService, auditLogService), deliveryService, auditLogService));
 
         // Default lock-acquire behavior: succeed by routing the request through the
         // mocked DocumentRepository so the returned doc carries the test's stubbed

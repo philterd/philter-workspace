@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +56,8 @@ class DocumentFinalizationServiceTest {
     private final RedactionCertificateService certificates = mock(RedactionCertificateService.class);
     private final DocumentLockService locks = mock(DocumentLockService.class);
     private final DocumentSearchService search = mock(DocumentSearchService.class);
+    private final ai.philterd.workspace.repository.PendingUploadRepository pendingUploads =
+            mock(ai.philterd.workspace.repository.PendingUploadRepository.class);
     private final DocumentDeliveryService delivery = mock(DocumentDeliveryService.class);
     private final AuditLogService audit = mock(AuditLogService.class);
     private DocumentFinalizationService service;
@@ -63,7 +66,8 @@ class DocumentFinalizationServiceTest {
     @BeforeEach
     void setUp() {
         service = new DocumentFinalizationService(documents, spans, batches, policies, certificates, locks,
-                new DocumentChangeGuard(documents, audit), search, delivery, audit);
+                new DocumentChangeGuard(documents, audit), new SourceRetentionService(documents, spans,
+                        pendingUploads, batches, policies, search, audit), delivery, audit);
         batch = new Batch();
         batch.setId("b1");
         when(batches.findById("b1")).thenReturn(Optional.of(batch));
@@ -192,7 +196,10 @@ class DocumentFinalizationServiceTest {
         service.finalizeDocument(d, "lead@example.com", "api");
 
         assertNull(d.getOriginalText());
+        assertNotNull(d.getSourceClearedAt());
+        assertNotNull(d.getFinalizedAt());
         assertEquals("Bob's SSN is <<SSN>> and Ann wrote.", d.getRedactedText(), "Download keeps working");
+        verify(pendingUploads).deleteById("d1");
         final InOrder order = inOrder(certificates, spans, search, delivery);
         order.verify(certificates).generate(d, "lead@example.com");
         order.verify(spans).deleteByDocumentId("d1");
@@ -217,6 +224,7 @@ class DocumentFinalizationServiceTest {
         service.finalizeDocument(d, "lead@example.com", "review");
 
         assertEquals("Bob's SSN is 123-45-6789 and Ann wrote.", d.getOriginalText());
+        assertNull(d.getSourceClearedAt());
         verify(spans, never()).deleteByDocumentId(anyString());
         verify(audit).log(eq("FINALIZATION_POLICY_APPLIED"), eq("Document"), eq("d1"), anyMap());
     }

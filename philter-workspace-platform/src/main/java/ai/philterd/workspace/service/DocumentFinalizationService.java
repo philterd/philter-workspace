@@ -42,7 +42,7 @@ public class DocumentFinalizationService {
     private final RedactionCertificateService certificateService;
     private final DocumentLockService lockService;
     private final DocumentChangeGuard changeGuard;
-    private final DocumentSearchService searchService;
+    private final SourceRetentionService retentionService;
     private final DocumentDeliveryService deliveryService;
     private final AuditLogService auditLogService;
 
@@ -53,7 +53,7 @@ public class DocumentFinalizationService {
                                        final RedactionCertificateService certificateService,
                                        final DocumentLockService lockService,
                                        final DocumentChangeGuard changeGuard,
-                                       final DocumentSearchService searchService,
+                                       final SourceRetentionService retentionService,
                                        final DocumentDeliveryService deliveryService,
                                        final AuditLogService auditLogService) {
         this.documentRepository = documentRepository;
@@ -63,7 +63,7 @@ public class DocumentFinalizationService {
         this.certificateService = certificateService;
         this.lockService = lockService;
         this.changeGuard = changeGuard;
-        this.searchService = searchService;
+        this.retentionService = retentionService;
         this.deliveryService = deliveryService;
         this.auditLogService = auditLogService;
     }
@@ -116,6 +116,8 @@ public class DocumentFinalizationService {
         final String previous = document.getStatus();
         final String redacted = render(originalText, spans);
         document.changeStatus("FINALIZED");
+        // A delayed finalization policy counts from here (#68).
+        document.setFinalizedAt(java.time.Instant.now());
         // Kept on the document so Download and delivery still work after a finalization policy clears the source.
         document.setRedactedText(redacted);
         documentRepository.save(document);
@@ -185,27 +187,12 @@ public class DocumentFinalizationService {
                                     "option", option,
                                     "action", "RETAIN",
                                     "actor", actor == null ? "" : actor));
-            case FinalizationPolicy.OPTION_DELETE_IMMEDIATELY -> {
-                // Clear the source text and the spans' detected values, keeping the document record so it stays in
-                // the Document Queue and its certificate stays linked. The redacted text saved above keeps Download
-                // working.
-                final long spansDeleted = spanRepository.deleteByDocumentId(document.getId());
-                document.setOriginalText(null);
-                document.setStoragePath(null);
-                documentRepository.save(document);
-                // The full-text index holds the original text too.
-                final boolean indexCleared = searchService.removeDocument(document.getId());
-                auditLogService.log("FINALIZATION_POLICY_APPLIED", "Document", document.getId(),
-                        Map.of("policyId", policy.getId() == null ? "" : policy.getId(),
-                                "policyName", policy.getName() == null ? "" : policy.getName(),
-                                "option", option,
-                                "action", "SOURCE_CLEARED",
-                                "spansDeleted", spansDeleted,
-                                "indexCleared", indexCleared,
-                                "actor", actor == null ? "" : actor));
-            }
+            case FinalizationPolicy.OPTION_DELETE_IMMEDIATELY ->
+                    // Keeps the document record, so it stays in the Document Queue and its certificate stays linked.
+                    // The redacted text saved above keeps Download working.
+                    retentionService.clearSource(document, policy, actor);
             default -> {
-                // Delete after X days and after 48 hours need a scheduled job, which does not exist yet (#68).
+                // Delete after X days and after 48 hours are cleared later by SourceRetentionService.clearDue (#68).
             }
         }
     }
