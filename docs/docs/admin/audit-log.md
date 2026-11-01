@@ -49,6 +49,7 @@ and export them:
 | `DOCUMENT_DELIVER`                  | Document    | One attempt to write a finalized document's redacted text to its batch's [destination](destinations.md#delivering-finalized-documents), as the person who finalized it (or retried the delivery). Outcome `SUCCESS` with the destination's type, id, and name, the attempt number, the file name as a keyed hash, and the SHA-256 and size of what was written; or `FAILURE` with the destination, the attempt number, and `finalAttempt` when no more attempts follow |
 | `DOCUMENT_DELIVERY_RETRY`           | Document    | An administrator or the batch's team lead queued a failed delivery again, with the destination |
 | `DOCUMENT_AUDIT_EXPORT`             | Document    | Admin downloaded the per-document audit log as CSV  |
+| `AUDIT_LOG_EXPORT`                  | AuditLog    | An [export](#export) of the audit log, written whether or not it returned any rows: the format, the time range, the resource type, the user and resource ID filters as keyed hashes, the number of entries exported, and whether the export reached its cap (`truncated`). The preview is not recorded. |
 | `AUDIT_TRAIL_EXPORT`                | Document / AuditLog | An [audit trail with Philter's ledger](#audit-trail-with-philters-ledger) exported: for one document, with the format; for a time range, with the range, the number of events and chains, how many chains verified, and whether it was truncated |
 | `PHILTER_LEDGER_READ`               | Document    | The Review page read a document's chains from Philter's ledger, with the number of chains and entries |
 | `DOCUMENT_PII_SENT_TO_LLM`          | Document    | Fired **before** each outbound Ollama LLM call (Explain or Second Opinion). Records the Ollama instance, model, and span count. Written before the HTTP request so the entry exists even if Ollama is unreachable or returns an error. See [LLM-as-a-Judge](#llm-as-a-judge-events). |
@@ -161,6 +162,11 @@ preserve it.
 
 The export is capped at 100,000 rows per request. Narrow the time range or
 filters if you hit the cap.
+
+Each download is recorded as an `AUDIT_LOG_EXPORT` entry, after the query, so
+it is not in the file it describes. The user and resource ID filters are
+recorded as keyed hashes, as search queries are: an investigator holding the
+server's key can hash a value and match it. The preview is not recorded.
 
 ## Per-document audit log
 

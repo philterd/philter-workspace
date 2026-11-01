@@ -17,6 +17,7 @@ package ai.philterd.workspace.webapp.controllers;
 
 import ai.philterd.workspace.model.AuditLog;
 import ai.philterd.workspace.service.AuditLogQueryService;
+import ai.philterd.workspace.service.AuditLogService;
 import ai.philterd.workspace.util.Csv;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -40,7 +41,9 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
@@ -53,10 +56,13 @@ public class AuditLogAdminController {
 
     private final AuditLogQueryService auditLogQueryService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
-    public AuditLogAdminController(final AuditLogQueryService auditLogQueryService, final ObjectMapper objectMapper) {
+    public AuditLogAdminController(final AuditLogQueryService auditLogQueryService, final ObjectMapper objectMapper,
+                                   final AuditLogService auditLogService) {
         this.auditLogQueryService = auditLogQueryService;
         this.objectMapper = objectMapper;
+        this.auditLogService = auditLogService;
     }
 
     @GetMapping
@@ -78,10 +84,27 @@ public class AuditLogAdminController {
             throw new ResponseStatusException(BAD_REQUEST, "startTime must be before endTime");
         }
 
+        final String fmt = format == null ? "json" : format.trim().toLowerCase();
+        if (!"json".equals(fmt) && !"csv".equals(fmt)) {
+            throw new ResponseStatusException(BAD_REQUEST, "format must be 'json' or 'csv'");
+        }
+
         final List<AuditLog> entries = auditLogQueryService.find(
                 start, end, userEmail, resourceType, resourceId, EXPORT_LIMIT);
 
-        final String fmt = format == null ? "json" : format.trim().toLowerCase();
+        // #62: recorded before the download is written, with or without rows. The user and resource ID filters are
+        // free text, so they are kept as keyed hashes, as search queries are.
+        final Map<String, Object> details = new LinkedHashMap<>();
+        details.put("format", fmt);
+        details.put("startTime", start == null ? "" : start.toString());
+        details.put("endTime", end == null ? "" : end.toString());
+        details.put("userEmailHash", auditLogService.hashForAudit(trimmed(userEmail)));
+        details.put("resourceType", trimmed(resourceType));
+        details.put("resourceIdHash", auditLogService.hashForAudit(trimmed(resourceId)));
+        details.put("entries", entries.size());
+        details.put("truncated", entries.size() >= EXPORT_LIMIT);
+        auditLogService.log("AUDIT_LOG_EXPORT", "AuditLog", null, details);
+
         final String filename = "audit-log-" + Instant.now().toString().replace(':', '-');
 
         if ("csv".equals(fmt)) {
@@ -93,10 +116,6 @@ public class AuditLogAdminController {
                 writeCsv(w, entries);
             }
             return null;
-        }
-
-        if (!"json".equals(fmt)) {
-            throw new ResponseStatusException(BAD_REQUEST, "format must be 'json' or 'csv'");
         }
 
         final byte[] body = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(entries);
@@ -165,6 +184,11 @@ public class AuditLogAdminController {
         final AuditLogQueryService.QueryFilters filters = new AuditLogQueryService.QueryFilters(
                 start, end, userEmail, action, resourceType, resourceId, outcome, ipAddress);
         return auditLogQueryService.query(filters, page, pageSize);
+    }
+
+    /** A filter as the query uses it: trimmed, or empty when not given. */
+    private static String trimmed(final String value) {
+        return value == null ? "" : value.trim();
     }
 
     private void writeCsv(final Writer w, final List<AuditLog> entries) throws IOException {
