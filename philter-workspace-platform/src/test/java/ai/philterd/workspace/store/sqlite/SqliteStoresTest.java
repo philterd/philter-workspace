@@ -61,6 +61,24 @@ class SqliteStoresTest {
                         + "AND name LIKE 'ix_background_jobs_uniq%' ORDER BY name", String.class));
     }
 
+    @Test
+    void theRetiredGlobalBatchNameIndexIsDropped() throws Exception {
+        // A database from before #83, when batch names were unique across groups.
+        db.jdbc.execute("CREATE TABLE batches (id TEXT PRIMARY KEY NOT NULL, version INTEGER, doc TEXT NOT NULL) STRICT");
+        db.jdbc.execute("CREATE UNIQUE INDEX \"ix_batches_name\" ON batches (json_extract(doc, '$.name'))");
+
+        for (String group : List.of("g1", "g2")) {
+            final ai.philterd.workspace.model.Batch b = new ai.philterd.workspace.model.Batch();
+            b.setGroupId(group);
+            b.setName("Sample");
+            db.store.save(b);
+        }
+
+        assertEquals(List.of("ix_batches_group_name"),
+                db.jdbc.queryForList("SELECT name FROM sqlite_master WHERE type = 'index' "
+                        + "AND tbl_name = 'batches' AND name LIKE 'ix_%' ORDER BY name", String.class));
+    }
+
     private static BackgroundJob job(final String batchId, final String type) {
         final BackgroundJob j = new BackgroundJob();
         j.setBatchId(batchId);

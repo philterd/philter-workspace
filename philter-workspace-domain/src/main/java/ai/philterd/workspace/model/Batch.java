@@ -10,18 +10,26 @@
 package ai.philterd.workspace.model;
 
 import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.LocalDateTime;
 import java.util.Map;
 
+/**
+ * A batch's name is unique within its group, so a team lead is never told about another group's batch by a name
+ * being taken (#83). It was unique across all groups, through the index {@code name}, which is retired. The index
+ * covers only batches with both a group and a name, so the two stores agree on a batch without a group: SQLite never
+ * counts a missing value, and MongoDB would count it as null.
+ */
 @Document(collection = "batches")
+@CompoundIndex(name = "group_name", def = "{'groupId': 1, 'name': 1}", unique = true,
+        partialFilter = "{'groupId': {$exists: true}, 'name': {$exists: true}}")
+@RetiredIndexes("name")
 public class Batch {
 
     @Id
     private String id;
 
-    @Indexed(unique = true, sparse = true)
     private String name;
     private String description;
     private LocalDateTime createdAt;

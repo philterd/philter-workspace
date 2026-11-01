@@ -110,9 +110,10 @@ longer reads that name, so Philter Workspace reads `SPRING_DATA_MONGODB_URI` its
 
 ### `spring.data.mongodb.auto-index-creation=true`
 
-Auto-create the indexes Philter Workspace needs (unique-name constraints on users and
-batches, "one in-flight import per batch", etc.) the first time each
-collection is used. Leave this `true` unless you create the indexes through
+Auto-create the indexes Philter Workspace needs (unique names for users, and for batches
+within a group, "one in-flight import per batch", etc.) the first time each
+collection is used. An index Philter Workspace no longer uses, such as the one that made
+batch names unique across all groups, is dropped at startup. Leave this `true` unless you create the indexes through
 another mechanism — without them, duplicate-key checks won't be enforced and
 the import dispatcher won't behave correctly.
 

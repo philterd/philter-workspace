@@ -693,7 +693,8 @@ class BlindDoubleReviewIntegrationTest {
         final BatchAccessService batchAccessService = mock(BatchAccessService.class);
         when(batchAccessService.allowedBatchIds(any())).thenReturn(Set.of(BATCH_ID));
         return new TriageController(documentRepository, batchRepository, spanRepository,
-                userGroupsService, approvalRuleEvaluator, batchAccessService);
+                userGroupsService, approvalRuleEvaluator, batchAccessService,
+                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)));
     }
 
     private static Authentication alice() {

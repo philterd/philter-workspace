@@ -73,6 +73,13 @@ class MongoStoreStartupIT {
         // Not stopped after the tests: Spring closes the cached context at JVM exit, and its MongoDB
         // client would wait for a stopped server. Testcontainers removes the container then.
         mongo.start();
+        // An installation from before #83, when batch names were unique across groups through the index "name".
+        try (com.mongodb.client.MongoClient client = com.mongodb.client.MongoClients.create(
+                "mongodb://" + mongo.getHost() + ":" + mongo.getMappedPort(27017))) {
+            client.getDatabase("philter-workspace").getCollection("batches").createIndex(
+                    new org.bson.Document("name", 1),
+                    new com.mongodb.client.model.IndexOptions().name("name").unique(true).sparse(true));
+        }
     }
 
     @DynamicPropertySource
@@ -102,8 +109,12 @@ class MongoStoreStartupIT {
 
     @Test
     void indexesAreCreatedOnStartup() {
-        final IndexInfo name = index(Batch.class, "name");
-        assertTrue(name.isUnique() && name.isSparse(), name.toString());
+        final IndexInfo groupName = index(Batch.class, "group_name");
+        assertTrue(groupName.isUnique(), groupName.toString());
+        assertNotNull(groupName.getPartialFilterExpression(), groupName.toString());
+        // The global index on name is retired (#83), and dropped from an installation that has it.
+        assertTrue(mongoOperations.indexOps(Batch.class).getIndexInfo().stream()
+                .noneMatch(i -> i.getName().equals("name")), "the retired index is dropped");
 
         final IndexInfo running = index(BackgroundJob.class, "uniq_running_data_import_per_batch_v2");
         assertTrue(running.isUnique(), running.toString());

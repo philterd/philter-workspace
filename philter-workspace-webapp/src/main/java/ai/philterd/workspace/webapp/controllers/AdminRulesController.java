@@ -42,11 +42,14 @@ public class AdminRulesController {
 
     private final BatchRepository batchRepository;
     private final AuditLogService auditLogService;
+    private final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels;
 
     public AdminRulesController(final BatchRepository batchRepository,
-                                final AuditLogService auditLogService) {
+                                final AuditLogService auditLogService,
+                                final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels) {
         this.batchRepository = batchRepository;
         this.auditLogService = auditLogService;
+        this.batchLabels = batchLabels;
     }
 
     @GetMapping
@@ -55,13 +58,16 @@ public class AdminRulesController {
         final boolean ascending = !"desc".equalsIgnoreCase(dir);
         final List<Batch> batches = batchRepository.findAll(PageRequest.of(0, 500, Sort.by("name"))).getContent();
 
+        // Names are unique only within a group (#83), so a name shared by two groups' batches shows the group.
+        final Map<String, String> batchNames = batchLabels.of(batches);
+
         // Available batches: any batch can have a new rule set added (zero or more allowed now).
         final List<Map<String, Object>> available = new ArrayList<>();
         for (Batch b : batches) {
             if (b.isClosed()) continue;
             available.add(Map.of(
                     "id", b.getId(),
-                    "name", b.getName() == null ? b.getId() : b.getName()));
+                    "name", batchNames.get(b.getId())));
         }
 
         // One row per (batch, rule set). Rows sort by batch name first to keep the table grouped.
@@ -75,7 +81,7 @@ public class AdminRulesController {
                 }
                 final Map<String, Object> row = new LinkedHashMap<>();
                 row.put("batchId", b.getId());
-                row.put("batchName", b.getName());
+                row.put("batchName", batchNames.get(b.getId()));
                 row.put("batchClosed", b.isClosed());
                 row.put("ruleSetId", set.getId());
                 row.put("rules", set.getRules());

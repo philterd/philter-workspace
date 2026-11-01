@@ -290,7 +290,10 @@ was true for documents that were not approved.
 ### `GET /api/v1/batches`
 
 Session-allowed. List batches the caller can target. Honors the same
-`myGroupsOnly` query param. Returns a JSON array of `{id, name}`.
+`myGroupsOnly` query param. Returns a JSON array of `{id, name, label}`. Batch
+names are unique only within a group, so `label` is the name followed by the
+batch's group in parentheses when another batch in the response has the same
+name, and the name alone otherwise.
 
 ## Documents
 

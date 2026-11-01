@@ -101,6 +101,7 @@ public class RedactionController {
     private final ai.philterd.workspace.service.S3IngestJobService s3IngestJobService;
     private final ai.philterd.workspace.service.RdbIngestJobService rdbIngestJobService;
     private final ai.philterd.workspace.webapp.security.BootstrapKeyWarning bootstrapKeyWarning;
+    private final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels;
 
     public RedactionController(final RedactionService redactionService,
                                final BatchRepository batchRepository,
@@ -122,7 +123,8 @@ public class RedactionController {
                                final ai.philterd.workspace.service.LocalDirectoryIngestJobService localDirectoryIngestJobService,
                                final ai.philterd.workspace.service.S3IngestJobService s3IngestJobService,
                                final ai.philterd.workspace.service.RdbIngestJobService rdbIngestJobService,
-                               final ai.philterd.workspace.webapp.security.BootstrapKeyWarning bootstrapKeyWarning) {
+                               final ai.philterd.workspace.webapp.security.BootstrapKeyWarning bootstrapKeyWarning,
+                               final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels) {
         this.redactionService = redactionService;
         this.batchRepository = batchRepository;
         this.documentRepository = documentRepository;
@@ -144,6 +146,7 @@ public class RedactionController {
         this.s3IngestJobService = s3IngestJobService;
         this.rdbIngestJobService = rdbIngestJobService;
         this.bootstrapKeyWarning = bootstrapKeyWarning;
+        this.batchLabels = batchLabels;
     }
 
     @GetMapping("/")
@@ -226,6 +229,7 @@ public class RedactionController {
         }
         batches.sort(Comparator.comparing(Batch::getName, Comparator.nullsLast(String::compareToIgnoreCase)));
         model.addAttribute("batches", batches);
+        model.addAttribute("batchLabels", batchLabels.of(batches));
         model.addAttribute("caseTypes", generalSettingsService.load().getCaseTypePolicies().stream()
                 .map(ai.philterd.workspace.model.CaseTypePolicy::getCaseType).toList());
 

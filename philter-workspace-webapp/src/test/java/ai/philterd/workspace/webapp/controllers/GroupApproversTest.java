@@ -92,7 +92,8 @@ class GroupApproversTest {
         batch.setId("b1");
         batch.setName("Filings");
         when(batches.findById("b1")).thenReturn(Optional.of(batch));
-        final AdminRulesController rules = new AdminRulesController(batches, audit);
+        final AdminRulesController rules = new AdminRulesController(batches, audit,
+                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)));
         final UsernamePasswordAuthenticationToken admin =
                 new UsernamePasswordAuthenticationToken("admin@example.com", null, List.of());
 

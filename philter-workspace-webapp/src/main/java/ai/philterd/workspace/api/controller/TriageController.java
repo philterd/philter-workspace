@@ -50,18 +50,22 @@ public class TriageController {
     private final ApprovalRuleEvaluator approvalRuleEvaluator;
     private final BatchAccessService batchAccessService;
 
+    private final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels;
+
     public TriageController(final DocumentRepository documentRepository,
                             final BatchRepository batchRepository,
                             final SpanRepository spanRepository,
                             final UserGroupsService userGroupsService,
                             final ApprovalRuleEvaluator approvalRuleEvaluator,
-                            final BatchAccessService batchAccessService) {
+                            final BatchAccessService batchAccessService,
+                            final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels) {
         this.documentRepository = documentRepository;
         this.batchRepository = batchRepository;
         this.spanRepository = spanRepository;
         this.userGroupsService = userGroupsService;
         this.approvalRuleEvaluator = approvalRuleEvaluator;
         this.batchAccessService = batchAccessService;
+        this.batchLabels = batchLabels;
     }
 
     private static final Set<String> SORTABLE_FIELDS = Set.of("riskScore", "status", "batchId", "filename", "priority");
@@ -232,6 +236,8 @@ public class TriageController {
                     PageRequest.of(0, ADMIN_BATCH_LIST_LIMIT, Sort.by("name"))).getContent();
         }
 
+        // Names are unique only within a group (#83): label adds the group to a name two listed batches share.
+        final Map<String, String> labels = batchLabels.of(batches);
         return batches.stream()
                 .sorted(Comparator.comparing(
                         (Batch b) -> b.getName() == null ? "" : b.getName().toLowerCase()))
@@ -239,6 +245,7 @@ public class TriageController {
                     final Map<String, String> entry = new LinkedHashMap<>();
                     entry.put("id", b.getId());
                     entry.put("name", b.getName() == null ? b.getId() : b.getName());
+                    entry.put("label", labels.get(b.getId()));
                     return entry;
                 })
                 .toList();

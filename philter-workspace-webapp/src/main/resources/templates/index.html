@@ -251,7 +251,7 @@
                             <label for="batchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="batchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                             <a th:if="${seesBatchesNav}" th:href="@{/batches}" class="mt-1 inline-block text-sm text-brand-600 hover:text-brand-800">Create a new batch.</a>
                         </div>
@@ -350,7 +350,7 @@
                             <label for="osBatchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="osBatchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                         </div>
                         <div>
@@ -403,7 +403,7 @@
                             <label for="esBatchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="esBatchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                         </div>
                         <div>
@@ -456,7 +456,7 @@
                             <label for="s3BatchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="s3BatchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                         </div>
                         <div>
@@ -509,7 +509,7 @@
                             <label for="rdbBatchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="rdbBatchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                         </div>
                         <div>
@@ -562,7 +562,7 @@
                             <label for="localBatchId" class="block text-sm font-medium text-gray-700 mb-1">Batch</label>
                             <select id="localBatchId" name="batchId" required
                                     class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 p-2.5">
-                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${b.name}">name</option>
+                                <option th:each="b : ${batches}" th:value="${b.id}" th:text="${batchLabels[b.id]}">name</option>
                             </select>
                         </div>
                         <div>

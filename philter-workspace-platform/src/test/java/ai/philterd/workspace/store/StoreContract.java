@@ -264,23 +264,23 @@ public abstract class StoreContract {
 
     @Test
     void uniqueIndexRefusesDuplicates() {
-        final BatchRepository batches = repository(BatchRepository.class);
-        final Batch a = new Batch();
+        final GroupRepository groups = repository(GroupRepository.class);
+        final Group a = new Group();
         a.setName("same");
-        batches.save(a);
-        final Batch b = new Batch();
+        groups.save(a);
+        final Group b = new Group();
         b.setName("same");
-        assertThrows(DuplicateKeyException.class, () -> batches.save(b));
+        assertThrows(DuplicateKeyException.class, () -> groups.save(b));
     }
 
     @Test
     void uniqueFieldsLeftEmptyAreNotDuplicates() {
         // Uniqueness applies among records that have a value: MongoDB's unique indexes are
         // sparse, and SQLite's never count a missing value.
-        final BatchRepository batches = repository(BatchRepository.class);
-        batches.save(new Batch());
-        batches.save(new Batch());
-        assertEquals(2, batches.count());
+        final GroupRepository groups = repository(GroupRepository.class);
+        groups.save(new Group());
+        groups.save(new Group());
+        assertEquals(2, groups.count());
 
         final UserRepository users = repository(UserRepository.class);
         users.save(new User());
@@ -288,12 +288,37 @@ public abstract class StoreContract {
         assertEquals(2, users.count());
 
         // An empty string is a value.
-        final Batch blank = new Batch();
+        final Group blank = new Group();
         blank.setName("");
-        batches.save(blank);
-        final Batch secondBlank = new Batch();
+        groups.save(blank);
+        final Group secondBlank = new Group();
         secondBlank.setName("");
-        assertThrows(DuplicateKeyException.class, () -> batches.save(secondBlank));
+        assertThrows(DuplicateKeyException.class, () -> groups.save(secondBlank));
+    }
+
+    @Test
+    void aBatchNameIsUniqueWithinItsGroupOnly() {
+        // #83: a name another group uses is free, so taking it reveals nothing about that group.
+        final BatchRepository batches = repository(BatchRepository.class);
+        batches.save(batch("g1", "Smith v. Jones"));
+        batches.save(batch("g2", "Smith v. Jones"));
+        assertThrows(DuplicateKeyException.class, () -> batches.save(batch("g1", "Smith v. Jones")));
+        assertTrue(batches.existsByGroupIdAndName("g1", "Smith v. Jones"));
+        assertFalse(batches.existsByGroupIdAndName("g3", "Smith v. Jones"));
+
+        // The index covers only batches with a group and a name, the same in both stores.
+        batches.save(batch(null, "Ungrouped"));
+        batches.save(batch(null, "Ungrouped"));
+        batches.save(batch("g1", null));
+        batches.save(batch("g1", null));
+        assertEquals(6, batches.count());
+    }
+
+    private static Batch batch(final String groupId, final String name) {
+        final Batch b = new Batch();
+        b.setGroupId(groupId);
+        b.setName(name);
+        return b;
     }
 
     @Test

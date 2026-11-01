@@ -326,9 +326,11 @@ public class BatchController {
             redirectAttributes.addFlashAttribute("error", "Domain \"" + trimmedDomain + "\" is not a valid choice.");
             return "redirect:/batches";
         }
-        if (batchRepository.findByName(trimmed).isPresent()) {
+        // Names are unique within a group, so a name another group uses is never refused, and a team lead learns
+        // nothing about a group they cannot see (#83).
+        if (batchRepository.existsByGroupIdAndName(groupId, trimmed)) {
             redirectAttributes.addFlashAttribute("error",
-                    "A batch named \"" + trimmed + "\" already exists.");
+                    "This group already has a batch named \"" + trimmed + "\".");
             return "redirect:/batches";
         }
         final String trimmedFinalization = finalizationPolicyId == null ? "" : finalizationPolicyId.trim();
@@ -392,9 +394,9 @@ public class BatchController {
         try {
             batchRepository.save(batch);
         } catch (org.springframework.dao.DuplicateKeyException e) {
-            // Race against another admin creating the same name concurrently.
+            // Race against someone creating the same name in the same group concurrently.
             redirectAttributes.addFlashAttribute("error",
-                    "A batch named \"" + trimmed + "\" already exists.");
+                    "This group already has a batch named \"" + trimmed + "\".");
             return "redirect:/batches";
         }
         final Map<String, Object> auditDetails = new LinkedHashMap<>();
@@ -473,12 +475,23 @@ public class BatchController {
             return "redirect:/batches";
         }
         final String previousGroupId = batch.getGroupId();
+        final String groupName = groupRepository.findById(groupId).map(Group::getName).orElse(groupId);
+        // Names are unique within a group (#83). Only administrators reassign, and they see every group.
+        final String taken = "Group \"" + groupName + "\" already has a batch named \"" + batch.getName() + "\".";
+        if (!groupId.equals(previousGroupId) && batchRepository.existsByGroupIdAndName(groupId, batch.getName())) {
+            redirectAttributes.addFlashAttribute("error", taken);
+            return "redirect:/batches";
+        }
         batch.setGroupId(groupId);
-        batchRepository.save(batch);
+        try {
+            batchRepository.save(batch);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            redirectAttributes.addFlashAttribute("error", taken);
+            return "redirect:/batches";
+        }
         auditLogService.log("BATCH_GROUP_CHANGE", "Batch", batch.getId(),
                 Map.of("previousGroupId", previousGroupId == null ? "" : previousGroupId,
                         "newGroupId", groupId));
-        final String groupName = groupRepository.findById(groupId).map(Group::getName).orElse(groupId);
         redirectAttributes.addFlashAttribute(
                 "success",
                 "Batch \"" + batch.getName() + "\" assigned to group \"" + groupName + "\".");

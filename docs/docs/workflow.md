@@ -292,7 +292,7 @@ to exactly one batch. A batch carries:
 
 | Field                | Purpose                                                              |
 | -------------------- | -------------------------------------------------------------------- |
-| Name                 | Human-readable label (unique).                                       |
+| Name                 | Human-readable label, unique within the batch's group. Two groups may each have a batch of the same name, so a name another group uses is never refused. An administrator cannot move a batch into a group that already has one of the same name. |
 | Group                | Which user group can see and act on this batch (visibility scope).   |
 | Policy               | Which Philter policy to apply, or Philter's default policy.          |
 | PII Threshold        | Per-span confidence floor for auto-accepting detections.             |

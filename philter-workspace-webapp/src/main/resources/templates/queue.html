@@ -422,7 +422,7 @@
                 for (const b of batches) {
                     const opt = document.createElement('option');
                     opt.value = b.id;
-                    opt.textContent = b.name;
+                    opt.textContent = b.label || b.name;
                     select.appendChild(opt);
                 }
                 if (previousValue && batches.some(b => b.id === previousValue)) {

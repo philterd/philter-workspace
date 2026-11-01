@@ -221,6 +221,34 @@ public class RedactionControllerTest {
                 .andExpect(view().name("index"));
     }
 
+    @Test
+    public void batchesWithTheSameNameAreToldApartByGroupInThePickers() throws Exception {
+        // Names are unique only within a group (#83), so an administrator can see two batches named alike.
+        final java.util.List<Batch> batches = new java.util.ArrayList<>();
+        for (String[] b : new String[][] {{"b1", "Sample", "g1"}, {"b2", "Sample", "g2"}, {"b3", "Other", "g1"}}) {
+            final Batch batch = new Batch();
+            batch.setId(b[0]);
+            batch.setName(b[1]);
+            batch.setGroupId(b[2]);
+            batches.add(batch);
+        }
+        when(batchRepository.findAll(org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(batches));
+        for (String[] g : new String[][] {{"g1", "Claims"}, {"g2", "Litigation"}}) {
+            final ai.philterd.workspace.model.Group group = new ai.philterd.workspace.model.Group();
+            group.setId(g[0]);
+            group.setName(g[1]);
+            when(groupRepository.findById(g[0])).thenReturn(java.util.Optional.of(group));
+        }
+
+        final String body = mockMvc.perform(get("/upload").with(signedIn("admin", "ADMIN")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        org.junit.jupiter.api.Assertions.assertTrue(body.contains("value=\"b1\">Sample (Claims)</option>"), body);
+        org.junit.jupiter.api.Assertions.assertTrue(body.contains("value=\"b2\">Sample (Litigation)</option>"), body);
+        org.junit.jupiter.api.Assertions.assertTrue(body.contains("value=\"b3\">Other</option>"),
+                "a name used once is shown alone");
+    }
+
     @MockitoBean
     private ai.philterd.workspace.service.UserGroupsService userGroupsService;
 

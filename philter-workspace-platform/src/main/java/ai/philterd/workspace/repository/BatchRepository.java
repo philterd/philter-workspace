@@ -13,11 +13,11 @@ import ai.philterd.workspace.model.Batch;
 import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
-import java.util.Optional;
 
 @Repository
 public interface BatchRepository extends WorkspaceRepository<Batch, String> {
-    Optional<Batch> findByName(String name);
+    /** Whether {@code groupId} has a batch named {@code name}. Names are unique within a group (#83). */
+    boolean existsByGroupIdAndName(String groupId, String name);
     boolean existsByWeightSetId(String weightSetId);
     java.util.List<Batch> findByWeightSetId(String weightSetId);
     boolean existsByFinalizationPolicyId(String finalizationPolicyId);

@@ -10,6 +10,7 @@
 package ai.philterd.workspace.webapp;
 
 import ai.philterd.workspace.model.Batch;
+import ai.philterd.workspace.model.Group;
 import ai.philterd.workspace.repository.BatchRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.GroupRepository;
@@ -178,7 +179,6 @@ class BatchControllerTest {
     void createSucceedsForTeamLeadOfTheGroup() {
         // A USER who leads group g1 can create a batch there even though they aren't admin.
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
         when(userGroupsService.leadGroupIdsForEmail("user@x.com")).thenReturn(Set.of("g1"));
 
         final RedirectAttributes ra = flash();
@@ -252,23 +252,48 @@ class BatchControllerTest {
     }
 
     @Test
-    void createRejectsDuplicateBatchName() {
+    void createRejectsANameTheGroupAlreadyUses() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        final Batch existing = new Batch();
-        existing.setId("b-1");
-        existing.setName("Sample");
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.of(existing));
+        when(batchRepository.existsByGroupIdAndName("g1", "Sample")).thenReturn(true);
 
         final RedirectAttributes ra = flash();
         controller.create("Sample", null, null, null, null, "g1", null, false, "Financial", "", null, null, null, null, null, admin(), ra);
-        assertEquals("A batch named \"Sample\" already exists.", error(ra));
+        assertEquals("This group already has a batch named \"Sample\".", error(ra));
         verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void aTeamLeadMayUseANameAnotherGroupsBatchHas() {
+        // g2 has a batch named "Sample"; the lead of g1 is neither refused nor told so (#83).
+        when(groupRepository.existsById("g1")).thenReturn(true);
+        when(batchRepository.existsByGroupIdAndName("g2", "Sample")).thenReturn(true);
+        when(userGroupsService.leadGroupIdsForEmail("user@x.com")).thenReturn(Set.of("g1"));
+
+        final RedirectAttributes ra = flash();
+        controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
+                "fp1", "cp1", null, null, null, user(), ra);
+
+        assertNull(error(ra));
+        verify(batchRepository).existsByGroupIdAndName("g1", "Sample");
+        verify(batchRepository, never()).existsByGroupIdAndName(org.mockito.ArgumentMatchers.eq("g2"), anyString());
+        verify(batchRepository).save(any(Batch.class));
+    }
+
+    @Test
+    void aConcurrentCreateOfTheSameNameInTheGroupIsRefusedWithTheSameMessage() {
+        when(groupRepository.existsById("g1")).thenReturn(true);
+        when(batchRepository.save(any(Batch.class)))
+                .thenThrow(new org.springframework.dao.DuplicateKeyException("Duplicate key in batches"));
+
+        final RedirectAttributes ra = flash();
+        controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
+                "fp1", "cp1", null, null, null, admin(), ra);
+        assertEquals("This group already has a batch named \"Sample\".", error(ra));
     }
 
     @Test
     void createSucceedsWithValidDomain() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         final RedirectAttributes ra = flash();
         final String view = controller.create("Sample", null, 0.5, 0.2, null, "g1", null, false, "Healthcare", "", "fp1", "cp1", null, null, null, admin(), ra);
@@ -283,7 +308,6 @@ class BatchControllerTest {
     @Test
     void createDefaultsBlindDoubleReviewDisabledWhenCheckboxAbsent() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         final RedirectAttributes ra = flash();
         final String view = controller.create("Sample", null, null, null, null, "g1", null, false,
@@ -304,7 +328,6 @@ class BatchControllerTest {
         // Even if a percentage is sent, an unchecked checkbox means the feature is off and
         // the stored percentage is the model default — the submitted value is ignored.
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
                 "fp1", "cp1", null, /*blindEnabled*/ null, /*blindPct*/ 75, admin(), flash());
@@ -319,7 +342,6 @@ class BatchControllerTest {
     @Test
     void createPersistsExplicitPercentageWhenFeatureIsEnabled() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
                 "fp1", "cp1", null, /*blindEnabled*/ true, /*blindPct*/ 25, admin(), flash());
@@ -335,7 +357,6 @@ class BatchControllerTest {
         // The HTML checkbox can submit on without an explicit percentage if the input were
         // disabled in markup; the controller must fall back to 10% rather than refuse.
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
                 "fp1", "cp1", null, /*blindEnabled*/ true, /*blindPct*/ null, admin(), flash());
@@ -350,7 +371,6 @@ class BatchControllerTest {
     @Test
     void createRejectsBlindDoubleReviewPercentageBelowOne() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         final RedirectAttributes ra = flash();
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
@@ -364,7 +384,6 @@ class BatchControllerTest {
     @Test
     void createRejectsBlindDoubleReviewPercentageAbove100() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         final RedirectAttributes ra = flash();
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
@@ -377,7 +396,6 @@ class BatchControllerTest {
     @Test
     void createRejectsNegativeBlindDoubleReviewPercentage() {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
 
         final RedirectAttributes ra = flash();
         controller.create("Sample", null, null, null, null, "g1", null, false, "Healthcare", "",
@@ -497,6 +515,43 @@ class BatchControllerTest {
         controller.changeGroup("b1", "ghost", admin(), ra);
         assertEquals("A valid group must be selected.", error(ra));
         verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void changeGroupRefusesAGroupWithABatchOfTheSameName() {
+        final Batch b = new Batch();
+        b.setId("b1");
+        b.setName("Sample");
+        b.setGroupId("g1");
+        when(batchRepository.findById("b1")).thenReturn(Optional.of(b));
+        when(groupRepository.existsById("g2")).thenReturn(true);
+        final Group g2 = new Group();
+        g2.setId("g2");
+        g2.setName("Litigation");
+        when(groupRepository.findById("g2")).thenReturn(Optional.of(g2));
+        when(batchRepository.existsByGroupIdAndName("g2", "Sample")).thenReturn(true);
+
+        final RedirectAttributes ra = flash();
+        controller.changeGroup("b1", "g2", admin(), ra);
+        assertEquals("Group \"Litigation\" already has a batch named \"Sample\".", error(ra));
+        assertEquals("g1", b.getGroupId());
+        verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void changeGroupToTheBatchsOwnGroupIsNotTakenForAClash() {
+        final Batch b = new Batch();
+        b.setId("b1");
+        b.setName("Sample");
+        b.setGroupId("g1");
+        when(batchRepository.findById("b1")).thenReturn(Optional.of(b));
+        when(groupRepository.existsById("g1")).thenReturn(true);
+        when(batchRepository.existsByGroupIdAndName("g1", "Sample")).thenReturn(true);
+
+        final RedirectAttributes ra = flash();
+        controller.changeGroup("b1", "g1", admin(), ra);
+        assertNull(error(ra));
+        verify(batchRepository).save(b);
     }
 
     // ---------- close ----------
@@ -656,7 +711,6 @@ class BatchControllerTest {
     private Batch createWith(final BatchController c, final Double pii, final Double doc, final Double rate,
                              final RedirectAttributes ra) {
         when(groupRepository.existsById("g1")).thenReturn(true);
-        when(batchRepository.findByName("Sample")).thenReturn(Optional.empty());
         c.create("Sample", null, pii, doc, rate, "g1", null, false, "Healthcare", "", "fp1", "cp1", null, null, null, admin(), ra);
         final ArgumentCaptor<Batch> saved = ArgumentCaptor.forClass(Batch.class);
         verify(batchRepository, org.mockito.Mockito.atMost(1)).save(saved.capture());

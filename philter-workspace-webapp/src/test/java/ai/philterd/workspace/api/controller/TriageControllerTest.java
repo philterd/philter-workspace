@@ -58,7 +58,8 @@ class TriageControllerTest {
         batchAccessService = mock(BatchAccessService.class);
         when(batchAccessService.allowedBatchIds(any())).thenReturn(Set.of());
         controller = new TriageController(documentRepository, batchRepository, spanRepository,
-                userGroupsService, new ApprovalRuleEvaluator(), batchAccessService);
+                userGroupsService, new ApprovalRuleEvaluator(), batchAccessService,
+                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)));
     }
 
     private static Batch batch(final String id, final String groupId, final String name, final double documentThreshold) {
@@ -257,6 +258,31 @@ class TriageControllerTest {
         assertEquals(2, result.size());
         assertEquals("Alpha", result.get(0).get("name"));
         assertEquals("Zebra", result.get(1).get("name"));
+    }
+
+    @Test
+    void getBatchesLabelsANameTwoGroupsShareWithTheGroup() {
+        // Names are unique only within a group (#83).
+        final ai.philterd.workspace.repository.GroupRepository groups =
+                mock(ai.philterd.workspace.repository.GroupRepository.class);
+        for (String[] g : new String[][] {{"g1", "Claims"}, {"g2", "Litigation"}}) {
+            final ai.philterd.workspace.model.Group group = new ai.philterd.workspace.model.Group();
+            group.setId(g[0]);
+            group.setName(g[1]);
+            when(groups.findById(g[0])).thenReturn(java.util.Optional.of(group));
+        }
+        controller = new TriageController(documentRepository, batchRepository, spanRepository,
+                userGroupsService, new ApprovalRuleEvaluator(), batchAccessService,
+                new ai.philterd.workspace.webapp.ui.BatchLabels(groups));
+        when(batchRepository.findAll(any(PageRequest.class))).thenReturn(new PageImpl<>(List.of(
+                batch("b1", "g1", "Sample", 0.25), batch("b2", "g2", "Sample", 0.25), batch("b3", "g1", "Other", 0.25))));
+
+        final Map<String, String> labels = new java.util.HashMap<>();
+        for (Map<String, String> b : controller.getBatches(false, TestAuth.admin("admin@example.com"))) {
+            assertEquals(b.get("id").equals("b3") ? "Other" : "Sample", b.get("name"), "name is unchanged");
+            labels.put(b.get("id"), b.get("label"));
+        }
+        assertEquals(Map.of("b1", "Sample (Claims)", "b2", "Sample (Litigation)", "b3", "Other"), labels);
     }
 
     @Test

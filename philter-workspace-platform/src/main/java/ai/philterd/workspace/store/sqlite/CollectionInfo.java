@@ -47,6 +47,8 @@ final class CollectionInfo {
     final Field idField;
     final Field versionField;
     final List<IndexDef> indexes;
+    /** The SQLite names of the indexes {@link ai.philterd.workspace.model.RetiredIndexes} retires. */
+    final List<String> retiredIndexes;
 
     CollectionInfo(final Class<?> type) {
         this.type = type;
@@ -106,6 +108,17 @@ final class CollectionInfo {
             defs.add(new IndexDef("ix_" + table + "_" + name, paths, ci.unique(), partial));
         }
         this.indexes = List.copyOf(defs);
+
+        final List<String> retired = new ArrayList<>();
+        final ai.philterd.workspace.model.RetiredIndexes gone =
+                type.getAnnotation(ai.philterd.workspace.model.RetiredIndexes.class);
+        for (String name : gone == null ? new String[0] : gone.value()) {
+            if (!NAME.matcher(name).matches()) {
+                throw new IllegalStateException("Unsupported index name on " + type.getSimpleName());
+            }
+            retired.add("ix_" + table + "_" + name);
+        }
+        this.retiredIndexes = List.copyOf(retired);
     }
 
     String id(final Object entity) {
@@ -180,6 +193,10 @@ final class CollectionInfo {
                 final List<String> values = new ArrayList<>();
                 v.get("$in").forEach(n -> values.add(literal(n)));
                 parts.add(new Where(Where.field(e.getKey()) + " IN (" + String.join(", ", values) + ")", List.of()));
+            } else if (v.isObject() && v.has("$exists") && v.size() == 1 && v.get("$exists").isBoolean()
+                    && v.get("$exists").asBoolean()) {
+                // Spring Data leaves a null field out of a MongoDB document, so present means not null.
+                parts.add(new Where(Where.field(e.getKey()) + " IS NOT NULL", List.of()));
             } else if (v.isValueNode()) {
                 parts.add(new Where(Where.field(e.getKey()) + " = " + literal(v), List.of()));
             } else {

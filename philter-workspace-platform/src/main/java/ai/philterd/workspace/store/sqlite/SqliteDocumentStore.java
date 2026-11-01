@@ -71,6 +71,9 @@ public class SqliteDocumentStore {
         final CollectionInfo info = new CollectionInfo(type);
         jdbc.execute("CREATE TABLE IF NOT EXISTS \"" + info.table + "\" ("
                 + "id TEXT PRIMARY KEY NOT NULL, version INTEGER, doc TEXT NOT NULL) STRICT");
+        for (String retired : info.retiredIndexes) {
+            jdbc.execute("DROP INDEX IF EXISTS \"" + retired + "\"");
+        }
         for (CollectionInfo.IndexDef index : info.indexes) {
             final List<String> exprs = new ArrayList<>();
             for (String path : index.paths()) {
