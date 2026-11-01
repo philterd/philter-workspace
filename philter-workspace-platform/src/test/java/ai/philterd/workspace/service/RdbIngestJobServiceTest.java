@@ -99,7 +99,7 @@ class RdbIngestJobServiceTest {
         service = new RdbIngestJobService(jobRepository, dataSourceRepository, batchRepository,
                 documentRepository, ingestQueueService, cipher, inboxService,
                 auditLogService, importLogService,
-                (url, user, pass) -> stubConnection);
+                (url, user, pass) -> stubConnection, new JdbcUrlValidator(new DataSourceHostAllowList("")));
     }
 
     // ---------- start() validation ----------
@@ -335,11 +335,36 @@ class RdbIngestJobServiceTest {
                 auditLogService, importLogService,
                 (url, user, pass) -> {
                     throw new AssertionError("Connection must not be opened for dangerous SQL.");
-                });
+                }, new JdbcUrlValidator(new DataSourceHostAllowList("")));
         service.run("job-1");
 
         assertEquals(BackgroundJob.STATUS_FAILED, pending.getStatus());
         verify(ingestQueueService, never()).enqueueText(any(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void runRevalidatesTheJdbcUrlBeforeConnecting() {
+        // #73: a URL that now fails the check, such as one whose host resolves to a private address, is refused at
+        // run time, before a connection is opened.
+        for (String url : java.util.List.of("jdbc:postgresql://10.0.0.5:5432/db",
+                "jdbc:postgresql://db.example.com:5432/db?PGHOST=10.0.0.5")) {
+            final RelationalDbDataSource src = source("src-1");
+            src.setEncryptedJdbcUrl("enc:" + url);
+            final Batch batch = batch("b-1");
+            primeForRun(src, batch);
+            final BackgroundJob pending = pendingJob("job-1", src, batch);
+            when(jobRepository.findById("job-1")).thenReturn(Optional.of(pending));
+            service = new RdbIngestJobService(jobRepository, dataSourceRepository, batchRepository,
+                    documentRepository, ingestQueueService, cipher, inboxService,
+                    auditLogService, importLogService,
+                    (u, user, pass) -> {
+                        throw new AssertionError("Connection must not be opened for a refused URL.");
+                    }, new JdbcUrlValidator(new DataSourceHostAllowList("")));
+
+            service.run("job-1");
+
+            assertEquals(BackgroundJob.STATUS_FAILED, pending.getStatus(), url);
+        }
     }
 
     // ---------- helpers ----------

@@ -113,6 +113,7 @@ public class RdbIngestJobService {
      * {@link DefaultConnectionFactory#open}, which opens a fresh JDBC connection
      * from the data source's stored credentials and URL.
      */
+    private final JdbcUrlValidator jdbcUrlValidator;
     private final ConnectionFactory connectionFactory;
 
     @Autowired
@@ -124,10 +125,11 @@ public class RdbIngestJobService {
                                final SymmetricCipher cipher,
                                final InboxService inboxService,
                                final AuditLogService auditLogService,
-                               final DataImportLogService importLogService) {
+                               final DataImportLogService importLogService,
+                               final JdbcUrlValidator jdbcUrlValidator) {
         this(jobRepository, dataSourceRepository, batchRepository, documentRepository,
                 ingestQueueService, cipher, inboxService, auditLogService, importLogService,
-                new DefaultConnectionFactory());
+                new DefaultConnectionFactory(), jdbcUrlValidator);
     }
 
     /** Test-only constructor that lets a unit test inject a stub {@link ConnectionFactory}. */
@@ -140,7 +142,8 @@ public class RdbIngestJobService {
                         final InboxService inboxService,
                         final AuditLogService auditLogService,
                         final DataImportLogService importLogService,
-                        final ConnectionFactory connectionFactory) {
+                        final ConnectionFactory connectionFactory,
+                        final JdbcUrlValidator jdbcUrlValidator) {
         this.jobRepository = jobRepository;
         this.dataSourceRepository = dataSourceRepository;
         this.batchRepository = batchRepository;
@@ -151,6 +154,7 @@ public class RdbIngestJobService {
         this.auditLogService = auditLogService;
         this.importLogService = importLogService;
         this.connectionFactory = connectionFactory;
+        this.jdbcUrlValidator = jdbcUrlValidator;
     }
 
     /**
@@ -285,6 +289,12 @@ public class RdbIngestJobService {
         // any log line. (The validator currently refuses such URLs at save time,
         // but the strip is a no-op for well-formed URLs so it's safe to keep here.)
         final String safeUrl = JdbcUrlValidator.stripUserInfo(jdbcUrl);
+        // Validated again just before connecting, not only when saved (#73): the host's DNS answer may have changed.
+        final JdbcUrlValidator.Result urlCheck = jdbcUrlValidator.validate(jdbcUrl);
+        if (!urlCheck.ok()) {
+            finish(job, BackgroundJob.STATUS_FAILED, urlCheck.error());
+            return;
+        }
 
         // Substitute the watermark placeholder. Three cases:
         //   1. SQL has no :lastKey at all — the prepared/literal path is identical.

@@ -174,6 +174,42 @@ class S3IngestJobServiceTest {
         verify(jobRepository).save(any(BackgroundJob.class));
     }
 
+    // ---------- run(): the endpoint is checked again (#73) ----------
+
+    @Test
+    void runRefusesAnEndpointTheAllowListNoLongerAllows() {
+        // Allowed when queued, refused by the time the job runs: the endpoint was edited, or its host now resolves
+        // somewhere private.
+        final S3DataSource src = source("src-1");
+        src.setEndpoint("http://storage.example.com:9000");
+        primeRunFor(src);
+        when(hostAllowList.isAllowed("http://storage.example.com:9000")).thenReturn(false);
+        final BackgroundJob persisted = pendingJob("job-1", src.getId());
+        when(jobRepository.findById("job-1")).thenReturn(Optional.of(persisted));
+
+        service.run("job-1");
+
+        assertEquals(BackgroundJob.STATUS_FAILED, persisted.getStatus());
+        assertTrue(persisted.getErrorMessage().contains("allow-list"), persisted.getErrorMessage());
+        verify(ingestQueueService, never()).enqueueText(any(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void eachRequestToAnEndpointIsCheckedBeforeItIsSent() {
+        final S3IngestJobService.AllowListInterceptor interceptor =
+                new S3IngestJobService.AllowListInterceptor(new DataSourceHostAllowList(""));
+        final software.amazon.awssdk.http.SdkHttpRequest internal = software.amazon.awssdk.http.SdkHttpRequest.builder()
+                .uri(java.net.URI.create("http://169.254.169.254/latest/meta-data"))
+                .method(software.amazon.awssdk.http.SdkHttpMethod.GET).build();
+        final software.amazon.awssdk.core.interceptor.Context.BeforeTransmission context =
+                org.mockito.Mockito.mock(software.amazon.awssdk.core.interceptor.Context.BeforeTransmission.class);
+        when(context.httpRequest()).thenReturn(internal);
+
+        org.junit.jupiter.api.Assertions.assertThrows(DataSourceHostAllowList.HostNotAllowedException.class,
+                () -> interceptor.beforeTransmission(context,
+                        new software.amazon.awssdk.core.interceptor.ExecutionAttributes()));
+    }
+
     // ---------- run(): listing + glob filter ----------
 
     @Test

@@ -100,6 +100,33 @@ class AdminDataSourceControllerTest {
     // ====================================================================
 
     @Test
+    void anEndpointThatIsNotAllowedIsRefusedOnSaveAndEdit() {
+        // #73: checked when a source is saved or edited, not only by Test and when an import is queued.
+        final String internal = "http://169.254.169.254:9200";
+        when(repository.findFirstByNameIgnoreCase(anyString())).thenReturn(Optional.empty());
+        when(esRepository.findFirstByNameIgnoreCase(anyString())).thenReturn(Optional.empty());
+        when(repository.findById("os-1")).thenReturn(Optional.of(new OpenSearchDataSource()));
+        when(esRepository.findById("es-1")).thenReturn(Optional.of(new ai.philterd.workspace.model.ElasticsearchDataSource()));
+        when(s3Repository.findById("s3-1")).thenReturn(Optional.of(new ai.philterd.workspace.model.S3DataSource()));
+
+        final java.util.List<java.util.function.Function<RedirectAttributes, String>> saves = java.util.List.of(
+                ra -> controller.create("os", internal, "idx/_search {}", "body", null, null, null, ra),
+                ra -> controller.editOpenSearch("os-1", internal, "idx/_search {}", "body", null, null, null, false, ra),
+                ra -> controller.createEs("es", internal, "idx/_search {}", "body", null, null, null, ra),
+                ra -> controller.editEs("es-1", internal, "idx/_search {}", "body", null, null, null, false, ra),
+                ra -> controller.createS3("s3", internal, "bucket", "", "*.txt", null, null, ra),
+                ra -> controller.editS3("s3-1", internal, "bucket", "", "*.txt", null, null, false, ra));
+        for (java.util.function.Function<RedirectAttributes, String> save : saves) {
+            final RedirectAttributes ra = flash();
+            save.apply(ra);
+            assertTrue(error(ra) != null && error(ra).contains("not permitted"), String.valueOf(error(ra)));
+        }
+        verify(repository, never()).save(any());
+        verify(esRepository, never()).save(any());
+        verify(s3Repository, never()).save(any());
+    }
+
+    @Test
     void osCreateHappyPathPersistsAndAudits() {
         when(repository.findFirstByNameIgnoreCase("legal")).thenReturn(Optional.empty());
         final RedirectAttributes ra = flash();

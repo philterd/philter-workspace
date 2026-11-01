@@ -112,7 +112,7 @@ public class S3IngestJobService {
                               final DataImportLogService importLogService) {
         this(jobRepository, dataSourceRepository, batchRepository, documentRepository,
                 ingestQueueService, cipher, inboxService, hostAllowList, auditLogService,
-                importLogService, new DefaultS3ClientFactory());
+                importLogService, new DefaultS3ClientFactory(hostAllowList));
     }
 
     /** Test-only constructor that lets a unit test inject a stub {@link S3ClientFactory}. */
@@ -252,6 +252,14 @@ public class S3IngestJobService {
         final String prefix = source.getBucketKey() == null ? "" : source.getBucketKey();
         final String sourceUrl = sourceUrlFor(source);
 
+        // Checked again here, and before each request (#73): the endpoint may have changed since the job was queued,
+        // or its host may now resolve elsewhere.
+        if (source.getEndpoint() != null && !source.getEndpoint().isBlank()
+                && !hostAllowList.isAllowed(source.getEndpoint())) {
+            finish(job, BackgroundJob.STATUS_FAILED, "S3 endpoint host is not on the data-source allow-list "
+                    + "(philter-workspace.data-sources.allowed-hosts).");
+            return;
+        }
         try (S3Client s3 = s3ClientFactory.build(source, cipher)) {
             // Walk the bucket once to find candidates. Materializing into a list lets the
             // total count be known before any download starts, so the Background Jobs page
@@ -560,8 +568,31 @@ public class S3IngestJobService {
         S3Client build(S3DataSource source, SymmetricCipher cipher);
     }
 
+    /** Refuses an S3 request whose host the data-source host allow-list does not allow (#73). */
+    static final class AllowListInterceptor implements software.amazon.awssdk.core.interceptor.ExecutionInterceptor {
+
+        private final DataSourceHostAllowList hostAllowList;
+
+        AllowListInterceptor(final DataSourceHostAllowList hostAllowList) {
+            this.hostAllowList = hostAllowList;
+        }
+
+        @Override
+        public void beforeTransmission(final software.amazon.awssdk.core.interceptor.Context.BeforeTransmission context,
+                                       final software.amazon.awssdk.core.interceptor.ExecutionAttributes attributes) {
+            hostAllowList.requireAllowed(context.httpRequest().getUri().toString());
+        }
+    }
+
     /** Default factory used by Spring. */
     static final class DefaultS3ClientFactory implements S3ClientFactory {
+
+        private final DataSourceHostAllowList hostAllowList;
+
+        DefaultS3ClientFactory(final DataSourceHostAllowList hostAllowList) {
+            this.hostAllowList = hostAllowList;
+        }
+
         @Override
         public S3Client build(final S3DataSource source, final SymmetricCipher cipher) {
             final String access = decryptOrEmpty(cipher, source.getEncryptedAccessKey());
@@ -585,7 +616,9 @@ public class S3IngestJobService {
             // bucket URLs typically don't resolve against arbitrary hosts.
             if (hasEndpointOverride) {
                 b.endpointOverride(URI.create(source.getEndpoint()))
-                        .forcePathStyle(true);
+                        .forcePathStyle(true)
+                        // Every request's host is checked just before it is sent (#73).
+                        .overrideConfiguration(o -> o.addExecutionInterceptor(new AllowListInterceptor(hostAllowList)));
             }
             return b.build();
         }

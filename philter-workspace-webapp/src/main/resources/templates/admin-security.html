@@ -262,8 +262,8 @@
                             <p class="text-xs text-gray-500 mt-0.5">
                                 Recommended. When enabled, only configured hostnames can be
                                 contacted from data-source connections, ingest workers, and Test
-                                buttons. Uncheck to bypass the allow-list entirely — any
-                                operator-supplied endpoint will be accepted.
+                                buttons. Unchecked, any public host is accepted; private-range
+                                addresses are still refused unless the property names them.
                             </p>
                         </div>
                     </div>
@@ -276,9 +276,9 @@
                         <div>
                             <span class="font-semibold">The host allow-list is currently disabled.</span>
                             Outbound connections from data-source Test buttons, ingest workers,
-                            and Philter / Ollama probes are no longer restricted by hostname.
-                            This re-opens the SSRF surface the allow-list is designed to close.
-                            Re-enable as soon as practical.
+                            and Ollama probes may reach any public host. Private-range addresses
+                            are still refused unless the property names them. Re-enable as soon as
+                            practical.
                         </div>
                     </div>
 

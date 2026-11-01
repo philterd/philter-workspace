@@ -53,6 +53,10 @@ services:
       # default in application.properties is now off — production deployments
       # should never load synthetic data, but the dev stack benefits from it.
       - PHILTER_WORKSPACE_DEMO_DATA_ENABLED=true
+      # The demo data sources are containers on this stack's network, at private addresses, which the
+      # data-source host allow-list refuses unless named here. With a list set, a public host must be listed
+      # too, or the list turned off for public hosts under Admin → Security.
+      - PHILTER_WORKSPACE_DATA_SOURCES_ALLOWED_HOSTS=opensearch,elasticsearch,minio,postgres
       # This stack serves plain HTTP, and a browser drops a Secure cookie over HTTP except from localhost, so
       # signing in from another address or from Safari would fail. A deployment keeps Secure cookies behind
       # HTTPS (see docker-compose.prod.yaml).

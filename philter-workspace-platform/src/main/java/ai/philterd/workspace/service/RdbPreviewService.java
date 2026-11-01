@@ -65,9 +65,11 @@ public class RdbPreviewService {
     private static final int QUERY_TIMEOUT_SECONDS = 8;
 
     private final SymmetricCipher cipher;
+    private final JdbcUrlValidator jdbcUrlValidator;
 
-    public RdbPreviewService(final SymmetricCipher cipher) {
+    public RdbPreviewService(final SymmetricCipher cipher, final JdbcUrlValidator jdbcUrlValidator) {
         this.cipher = cipher;
+        this.jdbcUrlValidator = jdbcUrlValidator;
     }
 
     /**
@@ -107,6 +109,12 @@ public class RdbPreviewService {
         } catch (RuntimeException e) {
             log.warn("Failed to decrypt stored connection details for RDB preview: {}", e.getMessage());
             return Result.failed("Could not decrypt stored connection details.");
+        }
+
+        // Validated again just before connecting, not only when saved (#73).
+        final JdbcUrlValidator.Result urlCheck = jdbcUrlValidator.validate(jdbcUrl);
+        if (!urlCheck.ok()) {
+            return Result.failed(urlCheck.error());
         }
 
         final Properties props = new Properties();

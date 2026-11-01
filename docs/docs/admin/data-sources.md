@@ -677,26 +677,82 @@ hostname or a leading-wildcard pattern (`*.foo.com`) that matches one-or-
 more left-side labels (so `a.foo.com` and `a.b.foo.com` both match) and
 also the bare apex (`foo.com`).
 
-When configured, every URL on every admin **Test** click and every
-saved-source ingest job is checked against the list. This covers OpenSearch
-/ Elasticsearch data sources and Ollama instance endpoints
-(**Admin → LLM-as-a-Judge**). Philter's URL is set in the environment
-(`PHILTER_WORKSPACE_PHILTER_URL`) and is not checked. A non-matching host is rejected with the
-error *"Endpoint host is not permitted."* The check applies even to
-**already-saved** instances: if a host is removed from the allow-list
-later, a Test click on an existing row is also rejected.
+### When it is checked
+
+The list, and the private-range default-deny below, apply to OpenSearch,
+Elasticsearch, S3, and relational database data sources, and to Ollama
+instances (**Admin → LLM-as-a-Judge**). An endpoint or JDBC URL is checked:
+
+- when a data source is saved or edited;
+- by each **Test** click and each relational database **Preview**;
+- when an import is queued;
+- and again while the import runs: before every request to OpenSearch,
+  Elasticsearch, or an S3 endpoint, and before a relational database
+  connection is opened.
+
+Checking again at connect time means an endpoint edited after an import was
+queued, a host removed from the list since, or a hostname whose DNS answer
+has changed is refused rather than connected to. An S3 data source without
+an endpoint uses AWS's own endpoints and is not checked. Philter's URL is set
+in the environment (`PHILTER_WORKSPACE_PHILTER_URL`) and is not checked. A
+refused host is answered with *"Endpoint host is not permitted."*
+
+A hostname is resolved and **every** address it resolves to is checked; one
+private address is enough to refuse it. The Java runtime caches the answer
+(30 seconds by default, `networkaddress.cache.ttl`), so the connection made
+straight after a check uses the addresses that were checked. The one gap
+left is the cache entry expiring in the moment between the check and the
+connection.
+
+### JDBC URLs
+
+A JDBC URL must name a single host in the URL itself, in one of these forms:
+
+| Driver | Form |
+| --- | --- |
+| PostgreSQL | `jdbc:postgresql://host[:port]/database[?properties]` |
+| MySQL, MariaDB | `jdbc:mysql://host[:port]/database[?properties]`, `jdbc:mariadb://...` |
+| SQL Server | `jdbc:sqlserver://host[\instance][:port][;properties]` |
+| DB2 | `jdbc:db2://host[:port]/database[:properties;]` |
+| Oracle | `jdbc:oracle:thin:@host:port:sid`, `@//host:port/service`, or `@host:port/service` |
+
+URLs that let the driver connect somewhere the URL does not show are
+refused: no host (PostgreSQL then connects to `localhost`), more than one
+host, MySQL's key-value `address=(host=...)` form, sub-protocols such as
+`loadbalance:`, `replication:`, and `srv:` (hosts named by a DNS SRV record),
+Oracle connect descriptors (`(DESCRIPTION=...)`), LDAP lookups, and TNS aliases
+read from `tnsnames.ora`. So are properties that change the host, port, or
+service, whatever their case and whether or not they are percent-encoded:
+PostgreSQL's `PGHOST`, `PGPORT`, `PGDBNAME`, and `service`; SQL Server's
+`serverName` (and `server`, `address`, `addr`, `network address`),
+`portNumber`, `instanceName`, and `failoverPartner`; DB2's
+`clientRerouteAlternateServerName` and `clientRerouteAlternatePortNumber`;
+MySQL and MariaDB's socket and pipe settings (`localSocket`, `pipe`,
+`namedPipePath`, `protocol`, `socket`); and Oracle's `TNS_ADMIN`.
 
 ### Private-range default-deny
 
 Private-range addresses are blocked by default. Philter Workspace resolves the
-configured hostname and rejects it if it resolves to a loopback address
-(`127.x.x.x`), an RFC-1918 private range (`10.x.x.x`, `172.16–31.x.x`,
-`192.168.x.x`), or a link-local address (`169.254.x.x`). This applies to
-both admin form submissions and Test clicks. Numeric IP addresses in the
-URL are evaluated directly using `InetAddress.getByName(...)`, so a
-literal private IP (e.g. `http://127.0.0.1:9200` or
-`http://169.254.169.254/`) cannot bypass the check by skipping DNS
-resolution.
+configured hostname and rejects it if any address it resolves to is private
+or reserved:
+
+- **IPv4:** `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10` (carrier-grade NAT,
+  which holds some clouds' metadata addresses, such as `100.100.100.200`),
+  `127.0.0.0/8`, `169.254.0.0/16` (link-local), `172.16.0.0/12`,
+  `192.0.0.0/24` (which holds `192.0.0.192`), `192.168.0.0/16`,
+  `198.18.0.0/15`, and `224.0.0.0` and above (multicast, reserved, broadcast).
+- **IPv6:** `::`, `::1`, `fe80::/10`, `fec0::/10`, `fc00::/7` (which holds
+  AWS's `fd00:ec2::254`), `ff00::/8`, and `64:ff9b:1::/48`.
+- **IPv6 that carries an IPv4 address,** judged by that address:
+  IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible (`::a.b.c.d`), NAT64
+  (`64:ff9b::/96`), 6to4 (`2002::/16`), and Teredo (`2001::/32`, its server
+  and client). So `64:ff9b::a9fe:a9fe`, which reaches `169.254.169.254`
+  through NAT64, is refused, while `64:ff9b::808:808` is not.
+
+Numeric addresses are read by the Java runtime exactly as a connection
+reads them, so a literal private IP (`http://127.0.0.1:9200`,
+`http://169.254.169.254/`) or another way of writing one (`127.1`,
+`2130706433`) cannot bypass the check by skipping DNS resolution.
 
 The reason this exists by default — even before any operator has set
 `philter-workspace.data-sources.allowed-hosts` — is **server-side request forgery
@@ -708,8 +764,7 @@ loopback, intranet HTTP services on RFC-1918, and other tenants on the
 same VPC. The default-deny on private ranges closes that surface
 without requiring any configuration.
 
-The default-deny is **not absolute**. There are two ways to admit a
-private host:
+The default-deny is **not absolute**. A private host is admitted by naming it:
 
 1. **Add it to `philter-workspace.data-sources.allowed-hosts`.** When the
    property is set, Philter Workspace checks the resolved host against every
@@ -720,13 +775,8 @@ private host:
    as the hostname matches a pattern. This is the supported way to
    reach a legitimate internal OpenSearch / Elasticsearch / Philter /
    Ollama from the data-source UI.
-2. **Disable the allow-list from Admin → Security.** The master switch
-   bypasses both the pattern check *and* the private-range default-deny
-   for every outbound call. This is documented as not recommended — see
-   [Master switch (Admin → Security)](#master-switch-admin-security)
-   below and the
-   [Security settings explanation](security.md#data-source-host-allow-list)
-   for the SSRF rationale.
+Turning the allow-list off under Admin → Security does **not** admit a
+private host; see [Master switch (Admin → Security)](#master-switch-admin-security).
 
 ### Allow-list behavior summary
 
@@ -743,15 +793,17 @@ genuinely needs to reach.
 
 ### Master switch (Admin → Security)
 
-The whole allow-list — both the property-driven host patterns *and* the
-private-range default-deny — can be turned off from
-**Admin → Security → Enable host allow-list**. The setting is stored on
-the global settings document, defaults to **enabled**, and is read at
-request time, so a toggle takes effect on the next outbound check
-without restarting.
+**Admin → Security → Enable host allow-list** turns off the
+property-driven host patterns for **public** hosts: with it off, any public
+host is accepted. It never turns off the private-range default-deny, so a
+private host is still refused unless it is named in
+`philter-workspace.data-sources.allowed-hosts`. The setting is stored on the
+global settings document, defaults to **enabled**, and is read at request
+time, so a toggle takes effect on the next outbound check without
+restarting.
 
-Disabling the master switch is documented as **not recommended**: it
-re-opens the SSRF surface that this allow-list closes. See
+Disabling the master switch is **not recommended** where the patterns
+restrict which public hosts may be reached. See
 [Security settings → Data-source host allow-list](security.md#data-source-host-allow-list)
 for the rationale and the audit-trail entry that records each toggle.
 

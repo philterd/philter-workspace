@@ -75,6 +75,10 @@ public class AdminDataSourceController {
     private final ai.philterd.workspace.service.DataSourceHostAllowList hostAllowList;
     private final ai.philterd.workspace.service.JdbcUrlValidator jdbcUrlValidator;
     private final RdbPreviewService rdbPreviewService;
+    private static final String ENDPOINT_NOT_ALLOWED = "Endpoint host is not permitted. Private network addresses"
+            + " (loopback, RFC-1918, link-local, carrier-grade NAT, and IPv6 forms of them) are blocked by default, and"
+            + " when philter-workspace.data-sources.allowed-hosts is set, the host must be on it.";
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -200,6 +204,11 @@ public class AdminDataSourceController {
             redirectAttributes.addFlashAttribute("error", "Endpoint is required.");
             return "redirect:/admin/data-sources";
         }
+        // Checked on save and edit too, not only by Test and when an import is queued (#73).
+        if (!hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
+            return "redirect:/admin/data-sources";
+        }
         if (trimmedQuery.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Query is required.");
             return "redirect:/admin/data-sources";
@@ -288,6 +297,11 @@ public class AdminDataSourceController {
 
         if (trimmedEndpoint.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Endpoint is required.");
+            return "redirect:/admin/data-sources";
+        }
+        // Checked on save and edit too, not only by Test and when an import is queued (#73).
+        if (!hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
             return "redirect:/admin/data-sources";
         }
         if (trimmedQuery.isEmpty()) {
@@ -497,6 +511,11 @@ public class AdminDataSourceController {
             redirectAttributes.addFlashAttribute("error", "Endpoint is required.");
             return "redirect:/admin/data-sources";
         }
+        // Checked on save and edit too, not only by Test and when an import is queued (#73).
+        if (!hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
+            return "redirect:/admin/data-sources";
+        }
         if (trimmedQuery.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Query is required.");
             return "redirect:/admin/data-sources";
@@ -584,6 +603,11 @@ public class AdminDataSourceController {
 
         if (trimmedEndpoint.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Endpoint is required.");
+            return "redirect:/admin/data-sources";
+        }
+        // Checked on save and edit too, not only by Test and when an import is queued (#73).
+        if (!hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
             return "redirect:/admin/data-sources";
         }
         if (trimmedQuery.isEmpty()) {
@@ -676,6 +700,11 @@ public class AdminDataSourceController {
         }
         if (trimmedBucket.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Bucket name is required.");
+            return "redirect:/admin/data-sources";
+        }
+        // The endpoint is optional (AWS when blank); one that is given is checked on save and edit (#73).
+        if (!trimmedEndpoint.isEmpty() && !hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
             return "redirect:/admin/data-sources";
         }
         if (trimmedKey.isEmpty()) {
@@ -771,6 +800,11 @@ public class AdminDataSourceController {
 
         if (trimmedBucket.isEmpty()) {
             redirectAttributes.addFlashAttribute("error", "Bucket name is required.");
+            return "redirect:/admin/data-sources";
+        }
+        // The endpoint is optional (AWS when blank); one that is given is checked on save and edit (#73).
+        if (!trimmedEndpoint.isEmpty() && !hostAllowList.isAllowed(trimmedEndpoint)) {
+            redirectAttributes.addFlashAttribute("error", ENDPOINT_NOT_ALLOWED);
             return "redirect:/admin/data-sources";
         }
         if (trimmedKey.isEmpty()) {

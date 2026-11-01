@@ -94,6 +94,33 @@ class ElasticsearchIngestJobServiceTest {
     }
 
     @Test
+    void runChecksTheEndpointAgainBeforeEachRequest() {
+        // #73: allowed when queued is not enough. The endpoint may have been edited since, or its host may now
+        // resolve to a private address; the request is refused before it is sent.
+        final ai.philterd.workspace.model.ElasticsearchDataSource src = new ai.philterd.workspace.model.ElasticsearchDataSource();
+        src.setId("src-1");
+        src.setName("Demo");
+        src.setEndpoint("http://169.254.169.254:9200");
+        src.setQuery("contracts/_search {}");
+        src.setTextField("body");
+        final Batch batch = new Batch();
+        batch.setId("b1");
+        when(dataSourceRepository.findById("src-1")).thenReturn(Optional.of(src));
+        when(batchRepository.findById("b1")).thenReturn(Optional.of(batch));
+        final BackgroundJob job = new BackgroundJob();
+        job.setId("job-1");
+        job.setSourceId("src-1");
+        job.setBatchId("b1");
+        job.setStatus(BackgroundJob.STATUS_PENDING);
+        when(jobRepository.findById("job-1")).thenReturn(Optional.of(job));
+
+        service.run("job-1");
+
+        assertEquals(BackgroundJob.STATUS_FAILED, job.getStatus());
+        assertTrue(job.getErrorMessage().contains("not permitted"), job.getErrorMessage());
+    }
+
+    @Test
     void startRejectsEndpointNotOnAllowList() {
         final ElasticsearchIngestJobService restrictedService = new ElasticsearchIngestJobService(
                 jobRepository, dataSourceRepository, batchRepository, documentRepository,

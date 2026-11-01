@@ -33,13 +33,14 @@ import java.util.regex.Pattern;
  *       {@link #DANGEROUS_PARAMS} appearing anywhere in the URL (case-insensitive) is
  *       refused. The check is intentionally crude because driver param parsers are
  *       inconsistent across versions; refusing the whole URL is safer than guessing.</li>
- *   <li><strong>Host allow-list (opt-in):</strong> when the deployment configures
- *       {@code philter-workspace.data-sources.allowed-hosts} via {@link DataSourceHostAllowList},
- *       the host portion of the JDBC URL must be on the list. This is the same
- *       defense-in-depth host pinning that F8 added for OpenSearch / Elasticsearch.</li>
+ *   <li><strong>Host allow-list:</strong> the URL must name one host, in the form its driver
+ *       parses ({@link #hostAndRest}), with no property that changes the host, port, or service
+ *       ({@link #HOST_KEYS}); that host must pass {@link DataSourceHostAllowList}, which refuses
+ *       private addresses and, when configured, hosts not on the list (#73).</li>
  * </ol>
  *
- * <p>The validator does not connect to anything — it inspects the URL string only.
+ * <p>The validator does not connect to anything; it resolves the host to check its addresses. It runs when a data
+ * source is saved or edited and again just before each connection.
  */
 @Component
 public class JdbcUrlValidator {
@@ -110,22 +111,56 @@ public class JdbcUrlValidator {
             "logfile=");
 
     /**
-     * After the {@code jdbc:<driver>:} prefix, this pattern matches the host portion of
-     * the most common URL forms:
+     * The URL forms accepted, one per driver, so the host checked is the host each driver connects to (#73):
      *
      * <ul>
-     *   <li>{@code jdbc:postgresql://host[:port]/db}</li>
-     *   <li>{@code jdbc:mysql://host[:port]/db}</li>
-     *   <li>{@code jdbc:sqlserver://host[:port];...}</li>
-     *   <li>{@code jdbc:oracle:thin:@host:port:sid}</li>
-     *   <li>{@code jdbc:oracle:thin:@//host:port/service}</li>
+     *   <li>{@code jdbc:postgresql://host[:port]/db[?props]}</li>
+     *   <li>{@code jdbc:mysql://host[:port]/db[?props]} and {@code jdbc:mariadb://...}, with no sub-protocol
+     *       (such as {@code loadbalance:}, {@code replication:}, or {@code srv:}, which reaches the hosts a DNS
+     *       SRV record names)</li>
+     *   <li>{@code jdbc:sqlserver://host[\instance][:port][;props]}</li>
+     *   <li>{@code jdbc:db2://host[:port]/db[:props;]}</li>
      * </ul>
+     *
+     * Group 1 is the host, group 2 the rest of the URL.
      */
-    private static final Pattern HOST_PATTERN = Pattern.compile(
-            "(?:jdbc:[a-zA-Z0-9]+(?::[a-zA-Z0-9]+)*:)" // jdbc:<driver>[:<sub>]:
-                    + "(?://|@//?)"                     // // or @ or @//
-                    + "([^/:;?,#]+)",                   // host (no path/port/sep chars)
-            Pattern.CASE_INSENSITIVE);
+    private static final Pattern AUTHORITY_URL = Pattern.compile(
+            "^jdbc:(?:postgresql|mysql|mariadb|sqlserver|db2)://(\\[[^]]*]|[^/?;:\\\\]*)(.*)$",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+    /** What may follow the host in {@link #AUTHORITY_URL}: a SQL Server instance, a port, then the rest. */
+    private static final Pattern AFTER_HOST = Pattern.compile(
+            "^(\\\\[A-Za-z0-9_$-]+)?(:\\d{1,5})?([/?;].*)?$", Pattern.DOTALL);
+
+    /**
+     * Oracle's thin driver, {@code jdbc:oracle:thin:@[tcp[s]://][//]host:port(:sid|/service)}. Connect descriptors
+     * ({@code (DESCRIPTION=...)}), LDAP lookups, and TNS aliases resolved from {@code tnsnames.ora} name hosts the URL
+     * does not show, so they are refused. Group 1 is the host, group 2 the rest.
+     */
+    private static final Pattern ORACLE_URL = Pattern.compile(
+            "^jdbc:oracle:thin:@(?:tcps?://)?(?://)?(\\[[^]]*]|[^/:?(),]+)(:\\d{1,5}(?:[:/][^(),]*)?|/[^(),]*)$",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+    /** A host name or an IPv4 address, or an IPv6 address in brackets. */
+    private static final Pattern VALID_HOST = Pattern.compile(
+            "^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+])$");
+
+    /**
+     * Connection properties a driver reads as the host, port, or database service to connect to, or as another server
+     * to connect to instead, in any of the URL's property syntaxes (#73). Matched case-insensitively, with spaces
+     * removed. They include PostgreSQL's {@code PGHOST}, {@code PGPORT}, {@code PGDBNAME}, and {@code service}; SQL
+     * Server's {@code serverName} and its synonyms, {@code portNumber}, {@code instanceName}, and
+     * {@code failoverPartner}; DB2's client-reroute alternates; MySQL and MariaDB's socket and pipe settings; and
+     * Oracle's {@code tns_admin}.
+     */
+    static final Set<String> HOST_KEYS = Set.of(
+            "pghost", "pgport", "pgdbname", "service", "host", "hostaddr", "port",
+            "servername", "server", "address", "addr", "networkaddress", "portnumber", "instancename",
+            "failoverpartner", "clientreroutealternateservername", "clientreroutealternateportnumber",
+            "localsocket", "pipe", "namedpipepath", "protocol", "socket", "oracle.net.tns_admin", "tns_admin");
+
+    /** A property key in a URL: after {@code ?}, {@code &}, {@code ;}, {@code :}, or {@code (}, before {@code =}. */
+    private static final Pattern PROPERTY_KEY = Pattern.compile("[?&;:(]\\s*([A-Za-z][A-Za-z0-9_. ]*?)\\s*=");
 
     private static final Pattern DRIVER_PATTERN = Pattern.compile(
             "^jdbc:([a-zA-Z0-9]+)", Pattern.CASE_INSENSITIVE);
@@ -325,20 +360,25 @@ public class JdbcUrlValidator {
                     + "lists. Use a single host; configure failover at the connection-pool layer.");
         }
 
+        // The host the driver will connect to, parsed the way each driver parses its URL (#73).
+        final String[] hostAndRest = hostAndRest(url);
+        if (hostAndRest == null) {
+            return Result.rejected("JDBC URL could not be parsed. Use the form jdbc:<driver>://host[:port]/database"
+                    + " (or jdbc:oracle:thin:@host:port/service) with a single host.");
+        }
+        final String host = hostAndRest[0];
+        final String key = hostKey(hostAndRest[1]);
+        if (key != null) {
+            return Result.rejected("JDBC URL sets \"" + key + "\", which changes the host, port, or service the"
+                    + " driver connects to. Put the host and port in the URL itself.");
+        }
+
         // Host allow-list — private/loopback/link-local addresses are always blocked by
-        // DataSourceHostAllowList.isAllowed(); the allowlist additionally restricts public
-        // hosts when configured. Apply unconditionally so JDBC URLs get the same
-        // private-range protection as HTTP data-source endpoints.
+        // DataSourceHostAllowList; the allowlist additionally restricts public hosts when
+        // configured. Apply unconditionally so JDBC URLs get the same private-range
+        // protection as HTTP data-source endpoints.
         if (hostAllowList != null) {
-            final String host = extractHost(url);
-            if (host == null || host.isBlank()) {
-                return Result.rejected("JDBC URL host could not be parsed; cannot apply the "
-                        + "data-source host allow-list.");
-            }
-            // Reuse the same matcher that DataSourceHostAllowList exposes by handing it
-            // a synthetic http URL. This keeps wildcard / exact-match semantics consistent
-            // across data-source types.
-            if (!hostAllowList.isAllowed("http://" + host)) {
+            if (!hostAllowList.isHostAllowed(host)) {
                 return Result.rejected("JDBC URL host \"" + host
                         + "\" is not permitted. Private/loopback/link-local addresses are blocked"
                         + " by default; to allow this host add it to"
@@ -350,14 +390,43 @@ public class JdbcUrlValidator {
     }
 
     /**
-     * Best-effort host extraction for the common JDBC URL forms. Returns {@code null} if
-     * the URL doesn't look like one of the patterns the validator recognizes.
+     * The host a JDBC URL connects to and the rest of the URL after it, or null when the URL is not in a form this
+     * validator accepts (see {@link #AUTHORITY_URL} and {@link #ORACLE_URL}). An empty or malformed host is not
+     * accepted: PostgreSQL, for one, connects to {@code localhost} when the URL names no host.
      */
-    static String extractHost(final String jdbcUrl) {
+    static String[] hostAndRest(final String jdbcUrl) {
         if (jdbcUrl == null) return null;
-        final Matcher m = HOST_PATTERN.matcher(jdbcUrl);
-        if (m.find()) {
-            return m.group(1);
+        final String url = jdbcUrl.trim();
+        Matcher m = AUTHORITY_URL.matcher(url);
+        if (m.matches()) {
+            if (!AFTER_HOST.matcher(m.group(2)).matches()) return null;
+        } else {
+            m = ORACLE_URL.matcher(url);
+            if (!m.matches()) return null;
+        }
+        final String host = m.group(1);
+        if (!VALID_HOST.matcher(host).matches()) return null;
+        return new String[] {host, m.group(2)};
+    }
+
+    /**
+     * The first property in {@code rest} that changes where the driver connects ({@link #HOST_KEYS}), looked for both
+     * as written and percent-decoded, or null.
+     */
+    static String hostKey(final String rest) {
+        if (rest == null || rest.isEmpty()) return null;
+        String decoded = rest;
+        try {
+            decoded = java.net.URLDecoder.decode(rest, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            // Not valid percent-encoding: scanned as written only.
+        }
+        for (String text : List.of(rest, decoded)) {
+            final Matcher m = PROPERTY_KEY.matcher(text);
+            while (m.find()) {
+                final String key = m.group(1).replace(" ", "").toLowerCase(Locale.ROOT);
+                if (HOST_KEYS.contains(key)) return m.group(1).trim();
+            }
         }
         return null;
     }

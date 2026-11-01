@@ -28,9 +28,11 @@ import java.util.Locale;
  * Host allow-list for data-source URLs (OpenSearch / Elasticsearch test endpoints,
  * ingest workers, and Ollama test-connection calls).
  *
- * <p><strong>Default-deny for private ranges.</strong> RFC-1918, loopback, and link-local
- * addresses (10.x, 172.16–31.x, 192.168.x, 127.x, 169.254.x, ::1, fe80::) are blocked
- * by default — when no allow-list is configured, every private-range host is refused.
+ * <p><strong>Default-deny for private ranges.</strong> Private and reserved addresses
+ * ({@link #isPrivateAddress(InetAddress)}: RFC-1918, loopback, link-local, carrier-grade
+ * NAT, IPv6 unique-local, and IPv6 forms that carry any of them) are blocked by default.
+ * Every address a host resolves to is checked, and when no allow-list is configured,
+ * every private-range host is refused.
  * This closes the admin-triggered SSRF path against internal infrastructure (cloud
  * metadata endpoints, MongoDB / Redis on loopback, intranet HTTP services on RFC-1918,
  * etc.) without requiring any operator configuration. To admit a private host the
@@ -149,14 +151,23 @@ public class DataSourceHostAllowList {
         } catch (Exception e) {
             return false;
         }
+        return isHostAllowed(host);
+    }
+
+    /**
+     * {@link #isAllowed(String)} for a bare host name or address, such as one taken from a JDBC URL. Every address the
+     * host resolves to is checked, and one private address is enough to refuse it (#73). The JVM caches the answer
+     * (30 seconds by default), so a connection made straight after this check uses the addresses it checked.
+     */
+    public boolean isHostAllowed(final String host) {
         if (host == null || host.isBlank()) return false;
-        final String h = host.toLowerCase(Locale.ROOT);
+        final String h = host.toLowerCase(Locale.ROOT).replaceAll("^\\[|]$", "");
 
         // Private/loopback/link-local addresses are blocked at *all* times — the admin
         // toggle never widens this rule. Only an explicit allow-list entry can admit an
         // internal host. This closes the cloud-metadata / loopback / RFC-1918 SSRF path
         // even when an operator has turned the public-host check off.
-        if (isPrivateAddress(host)) {
+        if (resolve(h).stream().anyMatch(DataSourceHostAllowList::isPrivateAddress)) {
             return !patterns.isEmpty() && matchesPatterns(h);
         }
 
@@ -192,51 +203,102 @@ public class DataSourceHostAllowList {
         }
     }
 
+    /** Refuses a connection to a host this list does not allow, checked immediately before connecting (#73). */
+    public static final class HostNotAllowedException extends IllegalStateException {
+        public HostNotAllowedException() {
+            super("Endpoint host is not permitted by the data-source host allow-list.");
+        }
+    }
+
+    /** Throws {@link HostNotAllowedException} unless {@link #isAllowed(String)}. Call it just before connecting. */
+    public void requireAllowed(final String url) {
+        if (!isAllowed(url)) {
+            throw new HostNotAllowedException();
+        }
+    }
+
     /** Useful in error messages so admins know what to add to their allow-list. */
     public List<String> patterns() {
         return patterns;
     }
 
+    /** Every address {@code host} resolves to; none when it does not resolve, since nothing can connect to it. */
+    private static List<InetAddress> resolve(final String host) {
+        try {
+            return List.of(InetAddress.getAllByName(host));
+        } catch (UnknownHostException e) {
+            return List.of();
+        }
+    }
+
     /**
-     * Returns {@code true} if the host resolves to an address the JVM (or this method)
-     * recognizes as private. Covers:
+     * Whether an address is private, reserved, or otherwise not a public Internet address. Covers:
      *
      * <ul>
-     *   <li><strong>Loopback</strong> — 127.0.0.0/8, ::1</li>
-     *   <li><strong>Link-local</strong> — 169.254.0.0/16 (incl. cloud-metadata
-     *       169.254.169.254), fe80::/10</li>
-     *   <li><strong>Site-local (RFC-1918)</strong> — 10.0.0.0/8, 172.16.0.0/12,
-     *       192.168.0.0/16, plus IPv6 fec0::/10 (deprecated but still flagged by Java)</li>
-     *   <li><strong>Any-local</strong> — 0.0.0.0, :: (alias for "any local interface"
-     *       in many HTTP clients, which collapses to loopback)</li>
-     *   <li><strong>IPv6 unique local (ULA)</strong> — fc00::/7. Java's
-     *       {@link InetAddress#isSiteLocalAddress()} predates RFC 4193 and does not
-     *       flag this range, so we check the leading byte manually.</li>
+     *   <li><strong>IPv4:</strong> 0.0.0.0/8 (this network), 10.0.0.0/8, 100.64.0.0/10 (carrier-grade NAT, which
+     *       holds some clouds' metadata addresses, such as 100.100.100.200), 127.0.0.0/8, 169.254.0.0/16
+     *       (link-local, incl. the cloud-metadata 169.254.169.254), 172.16.0.0/12, 192.0.0.0/24 (IETF protocol
+     *       assignments, incl. 192.0.0.192), 192.168.0.0/16, 198.18.0.0/15 (benchmarking), and 224.0.0.0/3
+     *       (multicast, reserved, and broadcast).</li>
+     *   <li><strong>IPv6:</strong> :: and ::1, fe80::/10 (link-local), fec0::/10 (site-local), fc00::/7 (unique
+     *       local, incl. AWS's fd00:ec2::254), ff00::/8 (multicast), and 64:ff9b:1::/48 (local-use NAT64).</li>
+     *   <li><strong>IPv6 that carries an IPv4 address</strong> (#73), judged by that address: IPv4-mapped
+     *       ::ffff:0:0/96 (which Java turns into IPv4), IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16,
+     *       and Teredo 2001::/32 (its server and its client, which Teredo stores inverted).</li>
      * </ul>
      *
-     * <p>Numeric IP literals are parsed without a DNS lookup; hostnames are resolved
-     * via the JVM. If the hostname cannot be resolved, {@code false} is returned — an
-     * unresolvable host cannot be connected to anyway.
+     * <p>Numeric literals are parsed by the JVM exactly as a connection would parse them, so forms such as
+     * {@code 127.1} or {@code 2130706433} are judged by the address they connect to.
      */
-    private static boolean isPrivateAddress(final String host) {
-        try {
-            final InetAddress addr = InetAddress.getByName(host);
-            if (addr.isLoopbackAddress()
-                    || addr.isSiteLocalAddress()
-                    || addr.isLinkLocalAddress()
-                    || addr.isAnyLocalAddress()) {
-                return true;
-            }
-            // IPv6 ULA (fc00::/7) — Java doesn't flag these via isSiteLocalAddress.
-            final byte[] bytes = addr.getAddress();
-            if (bytes.length == 16) {
-                final int leading = bytes[0] & 0xff;
-                if ((leading & 0xfe) == 0xfc) return true;
-            }
-            return false;
-        } catch (UnknownHostException e) {
-            return false;
+    static boolean isPrivateAddress(final InetAddress addr) {
+        final byte[] b = addr.getAddress();
+        if (b.length == 4) {
+            return isPrivateV4(b[0] & 0xff, b[1] & 0xff, b[2] & 0xff);
         }
+        final int b0 = b[0] & 0xff;
+        final int b1 = b[1] & 0xff;
+        if (addr.isLoopbackAddress() || addr.isAnyLocalAddress() || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress() || (b0 & 0xfe) == 0xfc || b0 == 0xff) {
+            return true;
+        }
+        // IPv4-compatible ::a.b.c.d (the first 96 bits zero).
+        if (allZero(b, 0, 12)) {
+            return isPrivateV4(b[12] & 0xff, b[13] & 0xff, b[14] & 0xff);
+        }
+        // NAT64: the well-known prefix 64:ff9b::/96 carries an IPv4 address in its last 32 bits; the local-use
+        // prefix 64:ff9b:1::/48 maps to anything the network chooses.
+        if (b0 == 0x00 && b1 == 0x64 && (b[2] & 0xff) == 0xff && (b[3] & 0xff) == 0x9b) {
+            if ((b[4] & 0xff) == 0 && (b[5] & 0xff) == 1) return true;
+            return !allZero(b, 4, 12) || isPrivateV4(b[12] & 0xff, b[13] & 0xff, b[14] & 0xff);
+        }
+        // 6to4: 2002:aabb:ccdd::/48 carries a.b.c.d in bits 16 to 47.
+        if (b0 == 0x20 && b1 == 0x02) {
+            return isPrivateV4(b[2] & 0xff, b[3] & 0xff, b[4] & 0xff);
+        }
+        // Teredo 2001:0000::/32: the server's IPv4 address in bits 32 to 63, the client's inverted in the last 32.
+        if (b0 == 0x20 && b1 == 0x01 && b[2] == 0 && b[3] == 0) {
+            return isPrivateV4(b[4] & 0xff, b[5] & 0xff, b[6] & 0xff)
+                    || isPrivateV4(~b[12] & 0xff, ~b[13] & 0xff, ~b[14] & 0xff);
+        }
+        return false;
+    }
+
+    private static boolean isPrivateV4(final int a, final int b, final int c) {
+        return a == 0 || a == 10 || a == 127
+                || (a == 100 && (b & 0xc0) == 64)
+                || (a == 169 && b == 254)
+                || (a == 172 && (b & 0xf0) == 16)
+                || (a == 192 && b == 0 && c == 0)
+                || (a == 192 && b == 168)
+                || (a == 198 && (b & 0xfe) == 18)
+                || a >= 224;
+    }
+
+    private static boolean allZero(final byte[] b, final int from, final int to) {
+        for (int i = from; i < to; i++) {
+            if (b[i] != 0) return false;
+        }
+        return true;
     }
 
     private boolean matchesPatterns(final String h) {

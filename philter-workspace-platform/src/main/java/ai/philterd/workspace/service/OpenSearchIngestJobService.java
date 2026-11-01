@@ -374,6 +374,7 @@ public class OpenSearchIngestJobService {
                              final String scrollId) throws Exception {
         if (endpoint == null || scrollId == null || scrollId.isEmpty()) return;
         final String url = endpoint.replaceAll("/+$", "") + "/_search/scroll";
+        hostAllowList.requireAllowed(url);
         final java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("scroll_id", java.util.List.of(scrollId));
         final HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
@@ -387,6 +388,9 @@ public class OpenSearchIngestJobService {
     }
 
     private JsonNode sendJson(final String url, final String body, final String authHeader) throws Exception {
+        // Checked before every request, not only when the job was queued (#73): the endpoint may have changed since,
+        // or its host may now resolve elsewhere.
+        hostAllowList.requireAllowed(url);
         final HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .timeout(Duration.ofSeconds(60))
