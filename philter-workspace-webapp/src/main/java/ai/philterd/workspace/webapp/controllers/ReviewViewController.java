@@ -270,6 +270,7 @@ public class ReviewViewController {
         model.addAttribute("originalRedactions", originalRedactions);
         model.addAttribute("redactedRedactions", redactedRedactions);
         model.addAttribute("piiTypes", piiTypes);
+        model.addAttribute("redactLikeMinLength", ai.philterd.workspace.api.controller.ReviewController.REDACT_LIKE_MIN_LENGTH);
         model.addAttribute("ollamaInstances", ollamaInstances);
         model.addAttribute("defaultExplainInstanceId", defaultExplainInstanceId);
         model.addAttribute("defaultExplainModel", defaultExplainModel);

@@ -279,6 +279,79 @@ class ReviewControllerTest {
     }
 
     @Test
+    void redactAllLikeRefusesASpanShorterThanTheMinimum() {
+        // #75: a one-character span would match every such character in the document.
+        for (String text : List.of("a", " ab ")) {
+            final Span source = span("s1", "d1", "person", "APPROVED", 0, text.length(), text);
+            when(spanRepository.findById("s1")).thenReturn(Optional.of(source));
+            when(documentRepository.findById("d1")).thenReturn(Optional.of(document("d1", text + " a a a ab ab")));
+
+            final ReviewController.RedactLikeRefused refused = assertThrows(ReviewController.RedactLikeRefused.class,
+                    () -> controller.redactAllLike("s1", ADMIN));
+            assertTrue(refused.getMessage().contains("at least 3 characters"), refused.getMessage());
+            assertEquals(Map.of("message", refused.getMessage()), controller.redactLikeRefused(refused).getBody(),
+                    "the reason is in the body, since error messages are left out of error responses");
+            assertEquals(400, controller.redactLikeRefused(refused).getStatusCode().value());
+        }
+        verify(spanRepository, never()).save(any(Span.class));
+        verify(spanRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    void redactAllLikeStopsAtTheLimitAndASecondClickContinues() {
+        // 600 occurrences: the source and 599 others, more than one click applies.
+        final String text = "abc ".repeat(600);
+        final Span source = span("s1", "d1", "person", "PENDING", 0, 3, "abc");
+        when(spanRepository.findById("s1")).thenReturn(Optional.of(source));
+        when(documentRepository.findById("d1")).thenReturn(Optional.of(document("d1", text)));
+        when(spanRepository.findByDocumentId("d1")).thenReturn(List.of(source));
+        when(spanRepository.save(any(Span.class))).thenAnswer(inv -> inv.getArgument(0));
+        final List<Span> saved = new ArrayList<>();
+        when(spanRepository.saveAll(anyList())).thenAnswer(inv -> {
+            saved.addAll(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+
+        final Map<String, Object> first = controller.redactAllLike("s1", ADMIN);
+        assertEquals(ReviewController.REDACT_LIKE_MAX_MATCHES, first.get("created"));
+        assertEquals(true, first.get("limitReached"));
+        assertEquals(ReviewController.REDACT_LIKE_MAX_MATCHES, first.get("limit"));
+        assertEquals(ReviewController.REDACT_LIKE_MAX_MATCHES, saved.size());
+
+        // The second click sees the first click's spans, already approved by a person, and does not count them.
+        final List<Span> afterFirst = new ArrayList<>(List.of(source));
+        afterFirst.addAll(saved);
+        when(spanRepository.findByDocumentId("d1")).thenReturn(afterFirst);
+        saved.clear();
+        final Map<String, Object> second = controller.redactAllLike("s1", ADMIN);
+        assertEquals(599 - ReviewController.REDACT_LIKE_MAX_MATCHES, second.get("created"));
+        assertEquals(0, second.get("approved"));
+        assertEquals(false, second.get("limitReached"));
+    }
+
+    @Test
+    void theOverlapCheckAgreesWithAScanOfEveryRange() {
+        // #75: a sorted structure in place of a scan of every range for each match.
+        final java.util.Random random = new java.util.Random(75);
+        for (int trial = 0; trial < 200; trial++) {
+            final List<long[]> ranges = new ArrayList<>();
+            for (int i = random.nextInt(8); i > 0; i--) {
+                final long start = random.nextInt(50);
+                ranges.add(new long[]{start, start + 1 + random.nextInt(10)});
+            }
+            final ReviewController.Ranges sorted = new ReviewController.Ranges(ranges);
+            for (int start = 0; start < 60; start++) {
+                final int end = start + 1 + random.nextInt(6);
+                boolean scanned = false;
+                for (long[] r : ranges) {
+                    scanned |= start < r[1] && end > r[0];
+                }
+                assertEquals(scanned, sorted.overlaps(start, end), "[" + start + ", " + end + ")");
+            }
+        }
+    }
+
+    @Test
     void redactAllLikeAccessCheckRunsBeforeEmptyTextCheck() {
         // Regression for the F4-ordering bug: an empty-text span used to throw 400
         // *before* the access helper ran. A non-admin probing a real-but-inaccessible

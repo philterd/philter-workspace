@@ -712,6 +712,7 @@
         const originalRedactions = /*[[${originalRedactions}]]*/ [];
         const redactedRedactions = /*[[${redactedRedactions}]]*/ [];
         const piiTypes = /*[[${piiTypes}]]*/ [];
+        const redactLikeMinLength = /*[[${redactLikeMinLength}]]*/ 3;
         const defaultExplainInstanceId = /*[[${defaultExplainInstanceId}]]*/ null;
         const defaultExplainModel = /*[[${defaultExplainModel}]]*/ null;
         const secondOpinionConfigured = /*[[${secondOpinionConfigured}]]*/ false;
@@ -1025,9 +1026,13 @@
                 // a redaction candidate — i.e. APPROVED or PENDING/no decision yet. Rejected
                 // and second-opinion-pending spans disable it.
                 const redactLikeEligible = isApproved || (!isRejected && !isSecondOpinion);
-                const redactLikeDisabled = spanLocked || !redactLikeEligible;
+                // A short span would match every short run of text in the document (#75).
+                const redactLikeTooShort = (item.text || '').trim().length < redactLikeMinLength;
+                const redactLikeDisabled = spanLocked || !redactLikeEligible || redactLikeTooShort;
                 const redactLikeTitle = spanLocked
                     ? spanLockedReason
+                    : redactLikeTooShort
+                    ? `Redact All Like This needs a span of at least ${redactLikeMinLength} characters`
                     : (isRejected
                         ? 'This span is refused — Redact All Like This is disabled'
                         : (isSecondOpinion
@@ -1305,7 +1310,17 @@
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' }
                         });
-                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        if (!response.ok) {
+                            let detail = `HTTP ${response.status}`;
+                            try { detail = (await response.json()).message || detail; } catch (_) {}
+                            throw new Error(detail);
+                        }
+                        const result = await response.json();
+                        if (result.limitReached) {
+                            // Limited so one click cannot flood the document (#75); another click continues.
+                            alert(`Applied ${result.created + result.approved} matches and stopped: Redact All Like This `
+                                + `applies at most ${result.limit} at a time. Click it again to apply any that remain.`);
+                        }
                         window.location.reload();
                     } catch (err) {
                         redactLike.disabled = false;

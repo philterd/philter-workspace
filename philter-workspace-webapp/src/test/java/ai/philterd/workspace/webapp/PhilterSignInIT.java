@@ -1283,6 +1283,35 @@ class PhilterSignInIT {
     }
 
     @Test
+    void redactAllLikeThisRefusesAOneCharacterSpanWithItsReason() throws Exception {
+        final MockHttpSession session = new MockHttpSession();
+        final String address = newAddress();
+        signIn(session, address, "admin", ADMIN_PASSWORD);
+        final ai.philterd.workspace.model.Batch batch = new ai.philterd.workspace.model.Batch();
+        batch.setId(java.util.UUID.randomUUID().toString());
+        batch.setName("Redact like " + batch.getId());
+        batchRepository.save(batch);
+        final ai.philterd.workspace.model.Document queued = ingestQueueService.enqueueText(batch, "letter.txt",
+                "Box A, box B, box C.", 2);
+        drainUntilDone(queued.getId());
+
+        // Selecting one character still makes a span: one selection is one span (#75).
+        final String created = mockMvc.perform(post("/api/v1/documents/" + queued.getId() + "/spans").session(session)
+                        .with(csrf()).with(from(address)).contentType("application/json")
+                        .content("{\"type\":\"person\",\"start\":4,\"end\":5}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        final String spanId = new tools.jackson.databind.ObjectMapper().readTree(created).get("id").asString();
+
+        // Redact All Like This refuses it, with the reason in the body despite include-message=never.
+        final String refused = mockMvc.perform(post("/api/v1/spans/" + spanId + "/redact-like").session(session)
+                        .with(csrf()).with(from(address)).contentType("application/json"))
+                .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+        assertTrue(refused.contains("at least 3 characters"), refused);
+        assertEquals(1, spanRepository.findByDocumentId(queued.getId()).stream()
+                .filter(sp -> "A".equals(sp.getText())).count(), "no span was added");
+    }
+
+    @Test
     void tomcatRefusesAnUploadWithTooManyParts() throws Exception {
         // Through the real server: MockMvc does not parse multipart bodies with Tomcat (#79, CVE-2025-48988).
         final java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();

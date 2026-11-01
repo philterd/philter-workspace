@@ -439,7 +439,9 @@ Each navigator entry exposes:
 - **Redact All Like This** — finds every other case-sensitive occurrence
   of the exact text in the document and updates them to match. Useful for
   unambiguous strings (project names, email addresses); use with care on
-  short or substring-prone text.
+  short or substring-prone text. It needs a span of at least 3 characters
+  and applies at most 500 matches per click; see
+  [Reviewing](user-guide/reviewing.md).
 
 ### Document-level actions
 

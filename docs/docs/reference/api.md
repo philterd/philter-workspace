@@ -524,15 +524,22 @@ form posts can't trigger this endpoint).
 Response:
 
 ```json
-{ "created": 0, "approved": 0, "adjudicatedSkipped": 0 }
+{ "created": 0, "approved": 0, "adjudicatedSkipped": 0, "limitReached": false, "limit": 500 }
 ```
 
 `created` is the number of new spans inserted. `approved` is the number of
 existing spans flipped to approved. `adjudicatedSkipped` is the number of
 matching spans an approver adjudicated, which are left unchanged.
 
-`400` if the source span has empty text. `404` if the span or its document is
-missing.
+One call creates or approves at most `limit` (500) spans. `limitReached` is
+`true` when it stopped with occurrences left, some of which may be ones it would
+skip; calling it again continues, since a
+match that is already a person's approval with the source's type is skipped and
+not counted.
+
+`400` if the source span has empty text, or with `{"message": "..."}` if its
+text is shorter than 3 characters after trimming. `404` if the span or its
+document is missing.
 
 ### `POST /api/v1/spans/{id}/rule`
 

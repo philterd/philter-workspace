@@ -409,11 +409,37 @@ public class ReviewController {
         return Map.of("id", id, "deleted", true);
     }
 
+    /** The shortest span text, after trimming, that Redact All Like This matches (#75). */
+    public static final int REDACT_LIKE_MIN_LENGTH = 3;
+    /** The most spans one Redact All Like This creates or approves before it stops (#75). */
+    public static final int REDACT_LIKE_MAX_MATCHES = 500;
+
+    /** A Redact All Like This the reviewer can correct, answered with its reason (see {@link #redactLikeRefused}). */
+    public static final class RedactLikeRefused extends RuntimeException {
+        public RedactLikeRefused(final String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Error messages are left out of error responses ({@code spring.web.error.include-message=never}), so this
+     * refusal carries its reason in the body for the review page to show.
+     */
+    @org.springframework.web.bind.annotation.ExceptionHandler(RedactLikeRefused.class)
+    public org.springframework.http.ResponseEntity<Map<String, String>> redactLikeRefused(final RedactLikeRefused e) {
+        return org.springframework.http.ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+    }
+
     /**
      * {@code consumes = application/json} is a CSRF defence: a cross-site simple
      * form POST sends form-urlencoded data, which the JSON content-type
      * requirement rejects up front. The browser UI's fetch already sends an
      * empty JSON content-type header, so legitimate calls are unaffected.
+     *
+     * <p>Limited so one click cannot flood a document with spans or hold a request thread (#75): the span's text
+     * must be at least {@value #REDACT_LIKE_MIN_LENGTH} characters, and at most {@value #REDACT_LIKE_MAX_MATCHES}
+     * spans are created or approved, with {@code limitReached} saying when it stopped. Clicking again continues,
+     * since a match that is already a person's approval with the same type is not counted.
      */
     @PostMapping(value = "/spans/{id}/redact-like",
             consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -433,6 +459,10 @@ public class ReviewController {
         if (needle == null || needle.isEmpty()) {
             throw new ResponseStatusException(BAD_REQUEST, "Source span has no text to match.");
         }
+        if (needle.trim().length() < REDACT_LIKE_MIN_LENGTH) {
+            throw new RedactLikeRefused("Redact All Like This needs a span of at least " + REDACT_LIKE_MIN_LENGTH
+                    + " characters, so it does not match every short run of text in the document.");
+        }
         // Redact All Like This is only meaningful while the source span is still a redaction
         // candidate. If the reviewer refused it or flagged it for a second opinion, the action
         // is disabled — propagating the source's redaction across the document doesn't make
@@ -445,7 +475,8 @@ public class ReviewController {
         requireMayChange(source, document, authentication, false);
         final String haystack = document.getOriginalText();
         if (haystack == null || haystack.isEmpty()) {
-            return Map.of("created", 0, "approved", 0, "adjudicatedSkipped", 0);
+            return Map.of("created", 0, "approved", 0, "adjudicatedSkipped", 0, "limitReached", false,
+                    "limit", REDACT_LIKE_MAX_MATCHES);
         }
 
         final List<Span> existing = spanRepository.findByDocumentId(source.getDocumentId());
@@ -458,6 +489,7 @@ public class ReviewController {
             byRange.put((start << 32) | (end & 0xFFFFFFFFL), s);
             existingRanges.add(new long[]{start, end});
         }
+        final Ranges occupied = new Ranges(existingRanges);
 
         final String actor = authentication == null ? null : authentication.getName();
         source.changeStatus("APPROVED", actor);
@@ -471,10 +503,16 @@ public class ReviewController {
         int created = 0;
         int approved = 0;
         int adjudicatedSkipped = 0;
+        boolean limitReached = false;
         int cursor = 0;
         while (true) {
             final int idx = haystack.indexOf(needle, cursor);
             if (idx < 0) break;
+            if (created + approved >= REDACT_LIKE_MAX_MATCHES) {
+                // Another match remains; the reviewer is told, and clicking again continues from here.
+                limitReached = true;
+                break;
+            }
             final int end = idx + needle.length();
             cursor = end;
 
@@ -488,6 +526,11 @@ public class ReviewController {
                 adjudicatedSkipped++;
                 continue;
             }
+            if (exact != null && "APPROVED".equals(exact.getStatus()) && exact.decidedByPerson()
+                    && java.util.Objects.equals(exact.getType(), source.getType())) {
+                // Already a person's approval of this type: not counted, so a second click continues past the limit.
+                continue;
+            }
             if (exact != null) {
                 exact.changeStatus("APPROVED", actor);
                 exact.setType(source.getType());
@@ -496,7 +539,7 @@ public class ReviewController {
                 continue;
             }
 
-            if (overlapsExisting(existingRanges, idx, end)) {
+            if (occupied.overlaps(idx, end)) {
                 continue;
             }
 
@@ -511,7 +554,8 @@ public class ReviewController {
             fresh.setCreatedAt(LocalDateTime.now());
             fresh.changeStatus("APPROVED", actor);
             toSave.add(fresh);
-            existingRanges.add(new long[]{idx, end});
+            // Matches do not overlap one another (the search resumes at this one's end), so a new span never
+            // needs adding to the ranges checked for later matches.
             created++;
         }
 
@@ -523,6 +567,8 @@ public class ReviewController {
         result.put("created", created);
         result.put("approved", approved);
         result.put("adjudicatedSkipped", adjudicatedSkipped);
+        result.put("limitReached", limitReached);
+        result.put("limit", REDACT_LIKE_MAX_MATCHES);
 
         final Map<String, Object> auditDetails = new LinkedHashMap<>();
         auditDetails.put("spanId", source.getId());
@@ -531,6 +577,7 @@ public class ReviewController {
         auditDetails.put("created", created);
         auditDetails.put("approved", approved);
         auditDetails.put("adjudicatedSkipped", adjudicatedSkipped);
+        auditDetails.put("limitReached", limitReached);
         auditLogService.log("SPAN_REDACT_LIKE", "Span", source.getId(), auditDetails);
         changeGuard.spansChanged(document, actor, "SPAN_REDACT_LIKE", source.getId());
         return result;
@@ -589,10 +636,44 @@ public class ReviewController {
         return saved;
     }
 
-    private static boolean overlapsExisting(final List<long[]> ranges, final int start, final int end) {
-        for (long[] r : ranges) {
-            if (start < r[1] && end > r[0]) return true;
+    /**
+     * The spans already in a document, for asking whether a range overlaps any of them in logarithmic time (#75).
+     * Sorted by start, with the greatest end among each prefix: a range [start, end) overlaps a span exactly when
+     * some span starting before {@code end} ends after {@code start}, that is when the greatest end among the spans
+     * starting before {@code end} is past {@code start}.
+     */
+    static final class Ranges {
+        private final long[] starts;
+        private final long[] maxEnds;
+
+        Ranges(final List<long[]> ranges) {
+            final List<long[]> sorted = new ArrayList<>(ranges);
+            sorted.sort(java.util.Comparator.comparingLong(r -> r[0]));
+            starts = new long[sorted.size()];
+            maxEnds = new long[sorted.size()];
+            long max = Long.MIN_VALUE;
+            for (int i = 0; i < sorted.size(); i++) {
+                starts[i] = sorted.get(i)[0];
+                max = Math.max(max, sorted.get(i)[1]);
+                maxEnds[i] = max;
+            }
         }
-        return false;
+
+        boolean overlaps(final long start, final long end) {
+            // The last span starting before end.
+            int lo = 0;
+            int hi = starts.length - 1;
+            int last = -1;
+            while (lo <= hi) {
+                final int mid = (lo + hi) >>> 1;
+                if (starts[mid] < end) {
+                    last = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return last >= 0 && maxEnds[last] > start;
+        }
     }
 }

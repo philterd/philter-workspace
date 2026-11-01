@@ -54,6 +54,14 @@ Each navigator entry shows:
   The page reloads to reflect the new spans. (Match is case-sensitive and
   literal — substrings of longer words can match, so use it on
   unambiguous text like a project name or an email address.)
+  So that one click cannot flood a document with spans, the span's text must
+  be at least 3 characters, not counting spaces at either end (the button is
+  disabled on a shorter span), and one click accepts or creates at most 500
+  spans, then stops and says so. Clicking again applies any that remain,
+  since matches a reviewer already accepted with the same type are not
+  counted again. Adding a span by selecting
+  text has no minimum length: a selection makes one span, and a single
+  character, such as an initial, can be what needs redacting.
 - **Don't flag this again** on a refused span, and **Always flag this** on a
   span added by hand, make a [detection rule](detection-rules.md) that changes
   what Philter flags in documents redacted from then on, in every batch in every group.
