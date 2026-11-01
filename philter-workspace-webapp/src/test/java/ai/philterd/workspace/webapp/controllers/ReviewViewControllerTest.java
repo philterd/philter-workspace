@@ -432,6 +432,42 @@ class ReviewViewControllerTest {
     }
 
     @Test
+    void aPdfUploadDownloadsAsTextNamedAndTypedAsText() {
+        // #66: the download is the redacted text, so a PDF upload downloads as .txt, not as a .pdf of text.
+        final Document d = approvedDoc("d1", "b1", null);
+        d.setFilename("filing.pdf");
+        d.setStatus("FINALIZED");
+        d.setRedactedText("Filed by <<PERSON>>.");
+        when(documentRepository.findById("d1")).thenReturn(Optional.of(d));
+        when(auditLogService.hashForAudit("filing_redacted.txt")).thenReturn("hashed");
+
+        final ResponseEntity<Resource> response = controller.download("d1", admin());
+
+        final org.springframework.http.ContentDisposition disposition = org.springframework.http.ContentDisposition
+                .parse(response.getHeaders().getFirst("Content-Disposition"));
+        assertTrue(disposition.isAttachment());
+        assertEquals("filing_redacted.txt", disposition.getFilename());
+        assertEquals("text/plain;charset=UTF-8", response.getHeaders().getContentType().toString());
+        final ArgumentCaptor<Map<String, Object>> details = capturingDetails("DOCUMENT_DOWNLOAD", "d1");
+        assertEquals("hashed", details.getValue().get("filenameHash"), "the filename is recorded only as a hash");
+    }
+
+    @Test
+    void aNameOutsideAsciiIsSentEncoded() {
+        final Document d = approvedDoc("d1", "b1", null);
+        d.setFilename("Müller \"brief\".txt");
+        d.setStatus("FINALIZED");
+        d.setRedactedText("x");
+        when(documentRepository.findById("d1")).thenReturn(Optional.of(d));
+
+        final String disposition = controller.download("d1", admin()).getHeaders().getFirst("Content-Disposition");
+
+        assertEquals(org.springframework.http.ContentDisposition.parse(disposition).getFilename(),
+                "Müller \"brief\"_redacted.txt");
+        assertTrue(disposition.contains("filename*=UTF-8''"), disposition);
+    }
+
+    @Test
     void downloadFallsBackToRenderingWhenRedactedTextNotPersisted() {
         // Legacy doc: FINALIZED prior to the redactedText persistence change.
         final Document d = approvedDoc("d1", "b1", "Hi Bob, your SSN is 123-45-6789.");

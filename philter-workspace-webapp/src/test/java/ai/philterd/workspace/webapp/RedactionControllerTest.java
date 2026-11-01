@@ -606,6 +606,49 @@ public class RedactionControllerTest {
     }
 
     @Test
+    public void download_namesTheRedactedTextAsText() throws Exception {
+        // #66: only the last extension is replaced, and a PDF name in any case becomes .txt when text is served.
+        for (String[] c : new String[][] {{"my.notes.txt", "text/plain", "my.notes_redacted.txt"},
+                {"filing.PDF", "application/pdf", "filing_redacted.txt"}}) {
+            final org.springframework.test.web.servlet.MvcResult result = mockMvc.perform(
+                            org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                    .post("/download")
+                                    .param("redactedText", "Hello.")
+                                    .param("fileName", c[0])
+                                    .param("contentType", c[1])
+                                    .with(csrf()).with(signedIn("user", "USER")))
+                    .andExpect(status().isOk())
+                    .andReturn();
+            org.junit.jupiter.api.Assertions.assertEquals("attachment; filename=\"" + c[2] + "\"",
+                    result.getResponse().getHeader("Content-Disposition"), c[0]);
+            org.junit.jupiter.api.Assertions.assertEquals("text/plain;charset=UTF-8",
+                    result.getResponse().getContentType(), c[0]);
+        }
+    }
+
+    @Test
+    public void download_namesARedactedPdfAsARedactedPdf() throws Exception {
+        final org.springframework.mock.web.MockHttpSession session = new org.springframework.mock.web.MockHttpSession();
+        session.setAttribute("originalFile", "%PDF-1.4 original".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        when(redactionService.getRedactedPdf(any(), any())).thenReturn("%PDF-1.4 redacted".getBytes());
+
+        final org.springframework.test.web.servlet.MvcResult result = mockMvc.perform(
+                        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .post("/download")
+                                .session(session)
+                                .param("redactedText", "")
+                                .param("fileName", "filing.pdf")
+                                .param("contentType", "application/pdf")
+                                .with(csrf()).with(signedIn("user", "USER")))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        org.junit.jupiter.api.Assertions.assertEquals("attachment; filename=\"filing_redacted.pdf\"",
+                result.getResponse().getHeader("Content-Disposition"));
+        org.junit.jupiter.api.Assertions.assertEquals("application/pdf", result.getResponse().getContentType());
+    }
+
+    @Test
     public void download_acceptsPlainTextAndSanitizesFilename() throws Exception {
         // The fileName is built with CR/LF and double-quote injection attempts; the
         // safeFilename helper must scrub them before they reach Content-Disposition.

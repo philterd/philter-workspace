@@ -98,6 +98,14 @@ document disabled or hidden, and "Read-only access" beside **Focus**. See
 Opening a document as an auditor does not lock it, so reviewers can keep
 working on it.
 
+## Downloading a finalized document
+
+**Download** on a finalized document saves its redacted text as a UTF-8 text
+file named after the upload with `_redacted.txt` in place of its extension:
+`letter.txt` downloads as `letter_redacted.txt`, and `filing.pdf` as
+`filing_redacted.txt`. The audit log records the download with a keyed hash of
+the file name, not the name.
+
 ## Delivery to a destination
 
 When a document's batch has a [destination](../admin/destinations.md#delivering-finalized-documents),

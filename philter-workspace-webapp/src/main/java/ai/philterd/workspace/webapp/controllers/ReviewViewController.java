@@ -470,7 +470,8 @@ public class ReviewViewController {
                 : ai.philterd.workspace.service.DocumentFinalizationService.render(document.getOriginalText(),
                         spanRepository.findByDocumentId(documentId));
         final byte[] body = redacted.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        final String filename = redactedFilename(document.getFilename());
+        // The download is the redacted text, so it is named and typed as text, whatever was uploaded (#66).
+        final String filename = ai.philterd.workspace.webapp.ui.RedactedFilenames.of(document.getFilename(), "txt");
         final String email = authentication == null ? null : authentication.getName();
         // Filename hashed (R2-F7) — filenames carry PII; audit log is cross-group-readable.
         auditLogService.log("DOCUMENT_DOWNLOAD", "Document", documentId,
@@ -480,16 +481,11 @@ public class ReviewViewController {
                         "bytes", body.length));
         return org.springframework.http.ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename=\"" + filename.replace("\"", "") + "\"")
-                .contentType(org.springframework.http.MediaType.TEXT_PLAIN)
+                        org.springframework.http.ContentDisposition.attachment()
+                                .filename(filename, java.nio.charset.StandardCharsets.UTF_8).build().toString())
+                .contentType(new org.springframework.http.MediaType("text", "plain",
+                        java.nio.charset.StandardCharsets.UTF_8))
                 .body(new org.springframework.core.io.ByteArrayResource(body));
-    }
-
-    private static String redactedFilename(final String original) {
-        if (original == null || original.isBlank()) return "redacted.txt";
-        final int dot = original.lastIndexOf('.');
-        if (dot <= 0) return original + "_redacted";
-        return original.substring(0, dot) + "_redacted" + original.substring(dot);
     }
 
     @PostMapping("/review/{documentId}/release")

@@ -622,16 +622,16 @@ public class RedactionController {
             final byte[] originalFile = (byte[]) session.getAttribute("originalFile");
             if (originalFile != null) {
                 content = redactedPdfOrRefuse(originalFile, redactionResponse);
+                workingFileName = ai.philterd.workspace.webapp.ui.RedactedFilenames.of(workingFileName, "pdf");
             } else {
                 content = redactedText.getBytes(StandardCharsets.UTF_8);
-                workingFileName = (workingFileName == null ? "" : workingFileName)
-                        .replace(".pdf", "_redacted.txt");
+                workingFileName = ai.philterd.workspace.webapp.ui.RedactedFilenames.of(workingFileName, "txt");
                 resolvedContentType = MediaType.TEXT_PLAIN_VALUE;
             }
         } else {
+            // The redacted text, so named as text whatever was uploaded (#66).
             content = redactedText.getBytes(StandardCharsets.UTF_8);
-            workingFileName = (workingFileName == null ? "" : workingFileName)
-                    .replace(".", "_redacted.");
+            workingFileName = ai.philterd.workspace.webapp.ui.RedactedFilenames.of(workingFileName, "txt");
         }
 
         final String safeName = safeFilename(workingFileName,
@@ -641,7 +641,9 @@ public class RedactionController {
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + safeName + "\"")
-                .contentType(MediaType.parseMediaType(resolvedContentType))
+                .contentType(MediaType.TEXT_PLAIN_VALUE.equals(resolvedContentType)
+                        ? new MediaType("text", "plain", StandardCharsets.UTF_8)
+                        : MediaType.parseMediaType(resolvedContentType))
                 .body(resource);
     }
 
