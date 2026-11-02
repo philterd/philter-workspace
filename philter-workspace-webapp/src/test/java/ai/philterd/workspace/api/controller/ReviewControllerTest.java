@@ -50,6 +50,7 @@ class ReviewControllerTest {
     private TestDoubles.RecordingAuditLog auditLogService;
     private ReviewController controller;
     private ai.philterd.workspace.service.DetectionRuleService detectionRules;
+    private ai.philterd.workspace.repository.BlindReviewSpanRepository copyRepository;
     private static final org.springframework.security.core.Authentication ADMIN = TestAuth.admin("admin@example.com");
 
     @BeforeEach
@@ -62,7 +63,11 @@ class ReviewControllerTest {
         controller = new ReviewController(spanRepository, documentRepository,
                 TestDoubles.documentAccess(batchRepository, documentRepository, userGroupsService),
                 auditLogService, detectionRules = mock(ai.philterd.workspace.service.DetectionRuleService.class),
-                new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService));
+                new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService),
+                copyRepository = mock(ai.philterd.workspace.repository.BlindReviewSpanRepository.class),
+                new ai.philterd.workspace.service.BlindDoubleReviewService(documentRepository, spanRepository,
+                        copyRepository, TestDoubles.documentAccess(batchRepository, documentRepository,
+                        userGroupsService), auditLogService));
         // Default stub: a document "d1" the access helper can resolve.
         // Tests that need a different shape override this.
         when(documentRepository.findById("d1")).thenReturn(Optional.of(document("d1", "the original text")));

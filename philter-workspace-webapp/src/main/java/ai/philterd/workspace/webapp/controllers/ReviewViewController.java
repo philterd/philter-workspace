@@ -31,6 +31,7 @@ import ai.philterd.workspace.model.User;
 import ai.philterd.workspace.model.UserSettings;
 import ai.philterd.workspace.service.ApprovalRuleEvaluator;
 import ai.philterd.workspace.service.AuditLogService;
+import ai.philterd.workspace.service.BlindDoubleReviewService;
 import ai.philterd.workspace.service.AuthUtils;
 import ai.philterd.workspace.service.DocumentAccessService;
 import ai.philterd.workspace.service.LlmJudgeDefaultsService;
@@ -100,6 +101,7 @@ public class ReviewViewController {
     private final ai.philterd.workspace.service.DocumentDeliveryService deliveryService;
     private final ai.philterd.workspace.service.DocumentChangeGuard changeGuard;
     private final ai.philterd.workspace.service.DocumentFinalizationService finalizationService;
+    private final BlindDoubleReviewService blindReview;
 
     public ReviewViewController(final DocumentRepository documentRepository,
                                 final SpanRepository spanRepository,
@@ -118,7 +120,8 @@ public class ReviewViewController {
                                 final ai.philterd.workspace.service.GeneralSettingsService generalSettingsService,
                                 final ai.philterd.workspace.service.DocumentDeliveryService deliveryService,
                                 final ai.philterd.workspace.service.DocumentChangeGuard changeGuard,
-                                final ai.philterd.workspace.service.DocumentFinalizationService finalizationService) {
+                                final ai.philterd.workspace.service.DocumentFinalizationService finalizationService,
+                                final BlindDoubleReviewService blindReview) {
         this.documentRepository = documentRepository;
         this.spanRepository = spanRepository;
         this.batchRepository = batchRepository;
@@ -137,6 +140,7 @@ public class ReviewViewController {
         this.deliveryService = deliveryService;
         this.changeGuard = changeGuard;
         this.finalizationService = finalizationService;
+        this.blindReview = blindReview;
     }
 
 
@@ -161,8 +165,11 @@ public class ReviewViewController {
         // Nor does anyone lock an approved, rejected, or finalized document (#71, #67): its spans cannot change until
         // it is reopened, and a lock taken only by viewing it would hold up Finalize, Unapprove, and Unreject.
         final boolean settled = Set.of("APPROVED", "REJECTED", "FINALIZED").contains(document.getStatus());
-        final Document acquired = email == null || readOnly || settled ? null
-                : documentLockService.acquire(documentId, email);
+        // Blind double review (#86): the blind reviewer works on their own copy and someone who may yet do the blind
+        // review sees no spans, so neither takes the document's lock.
+        final BlindDoubleReviewService.View view = blindReview.view(authentication, document);
+        final Document acquired = email == null || readOnly || settled || view != BlindDoubleReviewService.View.RECORD
+                ? null : documentLockService.acquire(documentId, email);
         boolean lockedByOther = false;
         String lockHolder = null;
         java.time.Instant lockExpiresAt = null;
@@ -173,7 +180,8 @@ public class ReviewViewController {
         } else {
             // Re-fetch to read who currently holds the lock.
             document = documentRepository.findById(documentId).orElse(document);
-            if (document.isLocked(java.time.Instant.now())
+            // A blind review is not held up by, and does not learn who holds, the document's lock (#86).
+            if (view == BlindDoubleReviewService.View.RECORD && document.isLocked(java.time.Instant.now())
                     && (email == null || !email.equalsIgnoreCase(document.getLockedBy()))) {
                 lockedByOther = true;
                 lockHolder = document.getLockedBy();
@@ -183,7 +191,16 @@ public class ReviewViewController {
 
         final String originalText = document.getOriginalText() == null ? "" : document.getOriginalText();
 
-        final List<Span> spans = spanRepository.findByDocumentId(documentId);
+        final List<Span> spans;
+        if (view == BlindDoubleReviewService.View.BLIND) {
+            spans = new ArrayList<>(blindReview.copies(documentId));
+        } else if (view == BlindDoubleReviewService.View.LANDING) {
+            spans = new ArrayList<>();
+        } else {
+            // Whoever is shown the document's spans cannot then do its blind second review.
+            document = blindReview.noteSeen(authentication, document);
+            spans = spanRepository.findByDocumentId(documentId);
+        }
         spans.sort(Comparator.comparingInt(s -> s.getLocation().characterStart()));
 
         final StringBuilder redactedBuilder = new StringBuilder();
@@ -287,11 +304,13 @@ public class ReviewViewController {
         // they're inexperienced or not.
         final Batch approvalBatch = document.getBatchId() == null ? null
                 : batchRepository.findById(document.getBatchId()).orElse(null);
-        final int approvalsRequired = approvalRuleEvaluator.approvalsRequired(approvalBatch, document, spans);
-        final int approvalsGiven = document.getApprovedBy().size();
+        final List<Span> recordSpans = view == BlindDoubleReviewService.View.RECORD ? spans : List.of();
+        final int approvalsRequired = approvalRuleEvaluator.approvalsRequired(approvalBatch, document, recordSpans);
+        // The first review's approvals are not shown in a blind review, whose changes never clear them.
+        final int approvalsGiven = view == BlindDoubleReviewService.View.RECORD ? document.getApprovedBy().size() : 0;
         model.addAttribute("approvalsRequired", approvalsRequired);
         model.addAttribute("approverRequired", approvalsRequired > 1
-                && approvalRuleEvaluator.approverPossiblyRequired(approvalBatch, document, spans));
+                && approvalRuleEvaluator.approverPossiblyRequired(approvalBatch, document, recordSpans));
         model.addAttribute("approvalsGiven", approvalsGiven);
         // As the approve action checks it: a reviewer cannot approve the same document twice.
         model.addAttribute("approvedByCurrentUser", authentication != null
@@ -302,10 +321,12 @@ public class ReviewViewController {
         model.addAttribute("readOnly", readOnly);
         // An approver of the document's group (#5) adjudicates spans and releases a document another reviewer holds.
         final boolean approver = documentAccessService.canApproveDocument(authentication, document);
-        model.addAttribute("isApprover", approver);
+        // A blind review does not adjudicate (#86).
+        model.addAttribute("isApprover", approver && view == BlindDoubleReviewService.View.RECORD);
         // A failed delivery (#24) can be retried by an administrator or the batch's team lead.
         model.addAttribute("canRetryDelivery", !readOnly && documentAccessService.canLeadDocument(authentication, document));
         model.addAttribute("canReleaseLock", approver);
+        addBlindReview(model, authentication, document, view);
 
         final ai.philterd.workspace.model.ComplianceProfile complianceProfile =
                 (approvalBatch == null || approvalBatch.getComplianceProfileId() == null) ? null
@@ -544,6 +565,105 @@ public class ReviewViewController {
         return "redirect:/review/" + documentId;
     }
 
+    /** The review page's blind double review state (#86). */
+    private void addBlindReview(final Model model, final Authentication authentication, final Document document,
+                                final BlindDoubleReviewService.View view) {
+        final boolean manager = blindReview.mayManage(authentication, document);
+        model.addAttribute("blindView", view.name());
+        model.addAttribute("doubleReview", document.isDoubleReview());
+        model.addAttribute("blindOpen", BlindDoubleReviewService.open(document));
+        model.addAttribute("blindInProgress", BlindDoubleReviewService.inProgress(document));
+        model.addAttribute("blindMayStart", blindReview.mayStart(authentication, document));
+        model.addAttribute("blindMayManage", manager);
+        model.addAttribute("blindAwaitingReconciliation", BlindDoubleReviewService.awaitingReconciliation(document));
+        model.addAttribute("blindMayReconcile", blindReview.mayReconcile(authentication, document));
+        // Who is doing the blind review is shown to those who can release it.
+        model.addAttribute("blindReviewer", manager && document.getSecondReviewer() != null
+                ? document.getSecondReviewer() : "");
+        final boolean showComparison = view == BlindDoubleReviewService.View.RECORD
+                && BlindDoubleReviewService.submitted(document)
+                && (manager || AuthUtils.isAuditor(authentication));
+        model.addAttribute("blindShowComparison", showComparison);
+        model.addAttribute("blindDisagreements", showComparison ? blindReview.disagreements(document) : List.of());
+    }
+
+    /** Loads a document the person may access, for a blind double review action. */
+    private Document blindTarget(final String documentId, final Authentication authentication) {
+        final Document document = documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
+        documentAccessService.requireDocumentAccess(authentication, document);
+        return document;
+    }
+
+    @PostMapping("/review/{documentId}/blind-review/start")
+    public String startBlindReview(@PathVariable final String documentId, final Authentication authentication,
+                                   final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        try {
+            blindReview.start(authentication, blindTarget(documentId, authentication));
+        } catch (BlindDoubleReviewService.Refused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/review/" + documentId;
+    }
+
+    @PostMapping("/review/{documentId}/blind-review/submit")
+    public String submitBlindReview(@PathVariable final String documentId, final Authentication authentication,
+                                    final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        try {
+            blindReview.submit(authentication, blindTarget(documentId, authentication));
+        } catch (BlindDoubleReviewService.Refused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
+            return "redirect:/review/" + documentId;
+        }
+        redirectAttributes.addFlashAttribute("success", "Blind second review recorded.");
+        return "redirect:/";
+    }
+
+    @PostMapping("/review/{documentId}/blind-review/release")
+    public String releaseBlindReview(@PathVariable final String documentId, final Authentication authentication,
+                                     final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        try {
+            blindReview.release(authentication, blindTarget(documentId, authentication));
+            redirectAttributes.addFlashAttribute("success", "Blind second review released. Someone else can start it.");
+        } catch (BlindDoubleReviewService.Refused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/review/" + documentId;
+    }
+
+    /** Shows the document's spans to someone who could have done the blind review, which they then cannot. */
+    @PostMapping("/review/{documentId}/blind-review/reveal")
+    public String revealFirstReview(@PathVariable final String documentId, final Authentication authentication,
+                                    final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        try {
+            blindReview.noteSeen(authentication, blindTarget(documentId, authentication));
+        } catch (BlindDoubleReviewService.Refused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/review/" + documentId;
+    }
+
+    @PostMapping("/review/{documentId}/blind-review/reconcile")
+    public String reconcileBlindReview(@PathVariable final String documentId, final Authentication authentication,
+                                       final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        try {
+            blindReview.reconcile(authentication, blindTarget(documentId, authentication));
+            redirectAttributes.addFlashAttribute("success", "The two reviews are marked reconciled.");
+        } catch (BlindDoubleReviewService.Refused e) {
+            redirectAttributes.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/review/" + documentId;
+    }
+
+    /** The blind reviewer changes only their own copy (#86), never the document's decision. */
+    private boolean refuseBlindReviewer(final Document document, final Authentication authentication,
+                                        final org.springframework.web.servlet.mvc.support.RedirectAttributes redirectAttributes) {
+        if (!blindReview.isBlindReviewer(authentication, document)) return false;
+        redirectAttributes.addFlashAttribute("error",
+                "You are doing this document's blind second review. Submit it from the review page.");
+        return true;
+    }
+
     @PostMapping("/review/{documentId}/approve")
     public String approve(@PathVariable final String documentId,
                           final Authentication authentication,
@@ -551,6 +671,9 @@ public class ReviewViewController {
         final Document preLoad = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, preLoad);
+        if (refuseBlindReviewer(preLoad, authentication, redirectAttributes)) {
+            return "redirect:/review/" + documentId;
+        }
 
         final String email = authentication == null ? null : authentication.getName();
 
@@ -626,21 +749,16 @@ public class ReviewViewController {
 
         // Record this approval.
         document.getApprovedBy().add(email);
-        // Stamp the first-ever reviewer so the blind-double-review filter can identify
-        // who is disqualified from the second pass. Set once and never overwritten.
-        // Capture each reviewer's approved-span snapshot so the IAA report can compute
-        // Cohen's Kappa between the first and second reviewer's labels.
+        // Stamp the first-ever reviewer, set once and never overwritten.
         if (document.getFirstReviewer() == null) {
             document.setFirstReviewer(email);
             document.setFirstReviewSpans(approvedSpanRanges(spans));
-        } else if (document.isDoubleReview()
-                && document.getFirstReviewer() != null
-                && !email.equalsIgnoreCase(document.getFirstReviewer())
-                && document.getSecondReviewer() == null) {
-            document.setSecondReviewer(email);
-            document.setSecondReviewSpans(approvedSpanRanges(spans));
         }
         final int acquired = document.getApprovedBy().size();
+        // The first review as completed, for the agreement report to compare with the blind second review (#86).
+        if (acquired >= required && BlindDoubleReviewService.open(document)) {
+            document.setFirstReviewSpans(approvedSpanRanges(spans));
+        }
 
         final String previous = document.getStatus();
         if (acquired >= required) {
@@ -695,6 +813,9 @@ public class ReviewViewController {
         final Document preReject = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, preReject);
+        if (refuseBlindReviewer(preReject, authentication, redirectAttributes)) {
+            return "redirect:/review/" + documentId;
+        }
 
         // Same pessimistic-lock + optimistic-lock contract as approve(). If the lock
         // is held by another reviewer we refuse the mutation rather than racing.
@@ -707,17 +828,13 @@ public class ReviewViewController {
         }
 
         final String previous = document.getStatus();
-        // Stamp the first-ever reviewer (set once) so the blind-double-review filter
-        // can identify who is disqualified from the second pass. Capture each reviewer's
-        // approved-span snapshot so the IAA report can compute Cohen's Kappa.
+        // Stamp the first-ever reviewer (set once), and the first review as completed for the agreement report to
+        // compare with the blind second review (#86).
         if (document.getFirstReviewer() == null) {
             document.setFirstReviewer(email);
             document.setFirstReviewSpans(approvedSpanRanges(spanRepository.findByDocumentId(documentId)));
-        } else if (document.isDoubleReview()
-                && !email.equalsIgnoreCase(document.getFirstReviewer())
-                && document.getSecondReviewer() == null) {
-            document.setSecondReviewer(email);
-            document.setSecondReviewSpans(approvedSpanRanges(spanRepository.findByDocumentId(documentId)));
+        } else if (BlindDoubleReviewService.open(document)) {
+            document.setFirstReviewSpans(approvedSpanRanges(spanRepository.findByDocumentId(documentId)));
         }
         document.changeStatus("REJECTED");
         try {
@@ -761,6 +878,9 @@ public class ReviewViewController {
         final Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
+        if (refuseBlindReviewer(document, authentication, redirectAttributes)) {
+            return "redirect:/review/" + documentId;
+        }
         if ("FINALIZED".equals(document.getStatus())) {
             redirectAttributes.addFlashAttribute("error",
                     "Document is FINALIZED. Finalized documents cannot be reopened.");
@@ -787,6 +907,9 @@ public class ReviewViewController {
         final Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
+        if (refuseBlindReviewer(document, authentication, redirectAttributes)) {
+            return "redirect:/review/" + documentId;
+        }
         if ("FINALIZED".equals(document.getStatus())) {
             redirectAttributes.addFlashAttribute("error",
                     "Document is FINALIZED. Finalized documents cannot be reopened.");
@@ -859,11 +982,12 @@ public class ReviewViewController {
      * though the document is technically APPROVED or REJECTED from the first pass.
      */
     private static boolean awaitingBlindSecondReviewBy(final Document candidate, final String currentEmail) {
-        if (!candidate.isDoubleReview()) return false;
-        if (candidate.getSecondReviewer() != null && !candidate.getSecondReviewer().isBlank()) return false;
-        final String firstReviewer = candidate.getFirstReviewer();
-        if (firstReviewer == null || firstReviewer.isBlank()) return false;
-        return currentEmail != null && !firstReviewer.equalsIgnoreCase(currentEmail);
+        if (currentEmail == null) return false;
+        if (BlindDoubleReviewService.inProgress(candidate)) {
+            return currentEmail.equalsIgnoreCase(candidate.getSecondReviewer());
+        }
+        return BlindDoubleReviewService.awaitingStart(candidate)
+                && !BlindDoubleReviewService.hasSeenFirstReview(candidate, currentEmail);
     }
 
     /**

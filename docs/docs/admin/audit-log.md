@@ -49,6 +49,10 @@ and export them:
 | `DOCUMENT_DELIVER`                  | Document    | One attempt to write a finalized document's redacted text to its batch's [destination](destinations.md#delivering-finalized-documents), as the person who finalized it (or retried the delivery). Outcome `SUCCESS` with the destination's type, id, and name, the attempt number, the file name as a keyed hash, and the SHA-256 and size of what was written; or `FAILURE` with the destination, the attempt number, and `finalAttempt` when no more attempts follow |
 | `DOCUMENT_DELIVERY_RETRY`           | Document    | An administrator or the batch's team lead queued a failed delivery again, with the destination |
 | `DOCUMENT_AUDIT_EXPORT`             | Document    | Admin downloaded the per-document audit log as CSV  |
+| `DOUBLE_REVIEW_START`               | Document    | A reviewer started a document's [blind second review](batches.md#reviewer-experience): the reviewer, the number of spans in their copy, and `from`: `detections` (Philter's detections as they arrived) or `spans` (the detected spans of a document selected before detections were kept) |
+| `DOUBLE_REVIEW_RELEASE`             | Document    | An approver or administrator discarded a blind second review in progress, with its reviewer and the number of spans discarded |
+| `DOUBLE_REVIEW_SUBMIT`              | Document    | The blind second review recorded: the reviewer, and the number of spans, approved, refused, and added by hand |
+| `DOUBLE_REVIEW_RECONCILE`           | Document    | The two reviews marked reconciled: both reviewers, the number of differences left between the document's spans and the blind review, and the document's status |
 | `AUDIT_LOG_EXPORT`                  | AuditLog    | An [export](#export) of the audit log, written whether or not it returned any rows: the format, the time range, the resource type, the user and resource ID filters as keyed hashes, the number of entries exported, and whether the export reached its cap (`truncated`). The preview is not recorded. |
 | `AUDIT_TRAIL_EXPORT`                | Document / AuditLog | An [audit trail with Philter's ledger](#audit-trail-with-philters-ledger) exported: for one document, with the format; for a time range, with the range, the number of events and chains, how many chains verified, and whether it was truncated |
 | `PHILTER_LEDGER_READ`               | Document    | The Review page read a document's chains from Philter's ledger, with the number of chains and entries |
@@ -84,7 +88,7 @@ and export them:
 | `DOCUMENT_QUEUED`                   | Document    | A web upload queued for redaction; the filename is recorded as a hash, with the case type when one was given |
 | `DOCUMENT_COMMENT_ADD`              | Document    | A comment added to a document; its length, not its text |
 | `DOCUMENT_SEARCH`                   | Document    | A full-text search; the query is recorded as a hash, with its length and the result count |
-| `SPAN_CREATE` / `SPAN_DELETE` / `SPAN_RESET` | Span | A reviewer added, deleted, or reset a span      |
+| `SPAN_CREATE` / `SPAN_DELETE` / `SPAN_RESET` | Span | A reviewer added, deleted, or reset a span. A change to a blind second review's copy, here or in `SPAN_UPDATE`, `SPAN_ADJUST`, and `SPAN_REDACT_LIKE`, has `blindReview: true` and clears no approval |
 | `SPAN_ADJUST`                       | Span        | A span's boundaries moved by a reviewer, or back to where it was detected by **Reset**: the start and end before and after, where it was detected, and its new length, never its text. Moving a span also accepts it, recorded as a `SPAN_UPDATE` (or `SPAN_ADJUDICATE`) |
 | `FINALIZATION_POLICY_CREATE` / `_UPDATE` / `_DELETE` | FinalizationPolicy | Batch finalization policy management |
 | `COMPLIANCE_PROFILE_CREATE` / `_EDIT` / `_ARCHIVE` / `_DELETE` | ComplianceProfile | Compliance profile management |

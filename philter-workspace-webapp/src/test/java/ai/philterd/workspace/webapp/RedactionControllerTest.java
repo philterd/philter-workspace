@@ -99,6 +99,9 @@ public class RedactionControllerTest {
     private SpanRepository spanRepository;
 
     @MockitoBean
+    private ai.philterd.workspace.repository.BlindReviewSpanRepository blindReviewSpanRepository;
+
+    @MockitoBean
     private DocumentRepository documentRepository;
 
     @MockitoBean

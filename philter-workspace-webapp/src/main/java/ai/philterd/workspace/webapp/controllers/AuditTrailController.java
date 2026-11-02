@@ -46,15 +46,18 @@ public class AuditTrailController {
     private final AuditTrailService trailService;
     private final AuditTrailWriter writer;
     private final AuditLogService auditLogService;
+    private final ai.philterd.workspace.service.BlindDoubleReviewService blindReview;
 
     public AuditTrailController(final DocumentRepository documentRepository,
                                 final DocumentLedgerService ledgerService, final AuditTrailService trailService,
-                                final AuditTrailWriter writer, final AuditLogService auditLogService) {
+                                final AuditTrailWriter writer, final AuditLogService auditLogService,
+                                final ai.philterd.workspace.service.BlindDoubleReviewService blindReview) {
         this.documentRepository = documentRepository;
         this.ledgerService = ledgerService;
         this.trailService = trailService;
         this.writer = writer;
         this.auditLogService = auditLogService;
+        this.blindReview = blindReview;
     }
 
     /** The document's ledger chains, how each verified, and their entries, for the review page. */
@@ -83,6 +86,12 @@ public class AuditTrailController {
                       @RequestParam(name = "format", defaultValue = "csv") final String format,
                       final Authentication authentication, final HttpServletResponse response) throws IOException {
         final Document document = load(id, authentication);
+        // The trail holds the first review's decisions (#86).
+        try {
+            blindReview.showSpans(authentication, document);
+        } catch (ai.philterd.workspace.service.BlindDoubleReviewService.Refused e) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, e.getMessage());
+        }
         final String fmt = AuditTrailWriter.format(format);
         if (fmt == null) {
             throw new ResponseStatusException(BAD_REQUEST, "format must be 'csv' or 'json'");

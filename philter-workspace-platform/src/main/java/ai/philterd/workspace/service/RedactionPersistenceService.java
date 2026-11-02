@@ -112,6 +112,11 @@ public class RedactionPersistenceService {
         final boolean needsReview = !spans.isEmpty()
                 && spans.stream().anyMatch(s -> "PENDING".equals(s.getStatus()));
         document.changeStatus(IngestStatus.pick(batch, needsReview));
+        // The blind second review starts from the detections as they arrived (#86), kept until it is started.
+        if (document.isDoubleReview() && document.getSecondReviewer() == null
+                && document.getSecondReviewSpans() == null) {
+            document.setDoubleReviewDetections(BlindDoubleReviewService.detections(spans));
+        }
         documentRepository.save(document);
         // A retried document may hold spans from an attempt that failed after saving them (for
         // example while indexing), so they are replaced rather than added to.

@@ -178,8 +178,10 @@ class PiiFieldEncryptionTest {
                         .getActualTypeArguments()[0]);
             }
         }
+        // Spring Data applies a callback to subclasses of its type too, as SpanCallbacks does to BlindReviewSpan.
         for (Class<?> type : PiiFieldEncryption.STORED_PATHS.keySet()) {
-            assertTrue(covered.contains(type), type.getSimpleName() + " has no MongoDB callbacks");
+            assertTrue(covered.stream().anyMatch(c -> c.isAssignableFrom(type)),
+                    type.getSimpleName() + " has no MongoDB callbacks");
         }
         assertTrue(covered.contains(PendingUpload.class));
     }

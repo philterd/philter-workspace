@@ -181,7 +181,7 @@ For each such batch the report shows:
 | Column        | Meaning                                                                              |
 |---------------|--------------------------------------------------------------------------------------|
 | Batch         | Batch name.                                                                          |
-| Documents     | Number of documents in the batch that have completed both first and second reviews. |
+| Documents     | Number of documents in the batch whose first and blind second reviews are both recorded. |
 | Tokens        | Total tokens compared across those documents.                                        |
 | Cohen's Kappa | Pooled token-level Cohen's Kappa between the two reviewers (see method below).      |
 
@@ -198,7 +198,11 @@ The score is **token-level Cohen's Kappa**:
    (one token = one whitespace-delimited word).
 2. Each token is given a binary label per reviewer:
     - **PII** — the token's character range overlaps any APPROVED span the
-      reviewer left at the moment they completed their review.
+      reviewer left at the moment they completed their review: for the first
+      reviewer, when the document was approved or rejected; for the second,
+      when they submitted their blind review of their own copy. The two
+      reviews are independent, and reconciling them afterwards does not
+      change the score.
     - **O** — otherwise.
 
     Partial overlap counts as PII. This is conservative: a token that touches

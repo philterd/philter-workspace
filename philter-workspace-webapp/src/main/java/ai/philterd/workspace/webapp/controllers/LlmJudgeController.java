@@ -170,6 +170,12 @@ public class LlmJudgeController {
         final Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
+        // The explanation reads the document's spans, which a blind second review must not see (#86).
+        if (ai.philterd.workspace.service.BlindDoubleReviewService.view(authentication, document)
+                != ai.philterd.workspace.service.BlindDoubleReviewService.View.RECORD) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                    "Explain is not available during a blind second review.");
+        }
 
         // Same indistinguishability rule as listModels: refuse access against the bare
         // id before the DB lookup so a probing caller can't tell which arbitrary ids

@@ -168,9 +168,29 @@ public class Document {
 
     /**
      * Snapshot of approved PII span ranges captured at the moment the second reviewer completed
-     * their review. Pairs with {@link #firstReviewSpans}.
+     * their review. Pairs with {@link #firstReviewSpans}. Set means the second review is recorded.
      */
     private java.util.List<int[]> secondReviewSpans;
+
+    /** Philter's detections as they arrived, for the blind second review to start from (#86). */
+    private java.util.List<DetectedSpan> doubleReviewDetections;
+
+    /**
+     * When {@link #secondReviewer} started the blind second review (#86). While a second reviewer is set and
+     * {@link #secondReviewSpans} is not, the review is in progress and only they work on it.
+     */
+    private Instant secondReviewStartedAt;
+    private Instant secondReviewSubmittedAt;
+
+    /**
+     * Everyone shown the document's spans before the second review was recorded (#86). None of them can do the
+     * blind second review, which must not have seen the first.
+     */
+    private java.util.List<String> firstReviewSeenBy = new java.util.ArrayList<>();
+
+    /** The approver or administrator who reconciled the two reviews, and when (#86). */
+    private String doubleReviewReconciledBy;
+    private Instant doubleReviewReconciledAt;
 
     public Document() {
     }
@@ -195,6 +215,39 @@ public class Document {
     public java.util.List<int[]> getSecondReviewSpans() { return secondReviewSpans; }
     public void setSecondReviewSpans(final java.util.List<int[]> secondReviewSpans) {
         this.secondReviewSpans = secondReviewSpans;
+    }
+
+    public java.util.List<DetectedSpan> getDoubleReviewDetections() { return doubleReviewDetections; }
+    public void setDoubleReviewDetections(final java.util.List<DetectedSpan> doubleReviewDetections) {
+        this.doubleReviewDetections = doubleReviewDetections;
+    }
+
+    public Instant getSecondReviewStartedAt() { return secondReviewStartedAt; }
+    public void setSecondReviewStartedAt(final Instant secondReviewStartedAt) {
+        this.secondReviewStartedAt = secondReviewStartedAt;
+    }
+
+    public Instant getSecondReviewSubmittedAt() { return secondReviewSubmittedAt; }
+    public void setSecondReviewSubmittedAt(final Instant secondReviewSubmittedAt) {
+        this.secondReviewSubmittedAt = secondReviewSubmittedAt;
+    }
+
+    public java.util.List<String> getFirstReviewSeenBy() {
+        if (firstReviewSeenBy == null) firstReviewSeenBy = new java.util.ArrayList<>();
+        return firstReviewSeenBy;
+    }
+    public void setFirstReviewSeenBy(final java.util.List<String> firstReviewSeenBy) {
+        this.firstReviewSeenBy = firstReviewSeenBy;
+    }
+
+    public String getDoubleReviewReconciledBy() { return doubleReviewReconciledBy; }
+    public void setDoubleReviewReconciledBy(final String doubleReviewReconciledBy) {
+        this.doubleReviewReconciledBy = doubleReviewReconciledBy;
+    }
+
+    public Instant getDoubleReviewReconciledAt() { return doubleReviewReconciledAt; }
+    public void setDoubleReviewReconciledAt(final Instant doubleReviewReconciledAt) {
+        this.doubleReviewReconciledAt = doubleReviewReconciledAt;
     }
 
     public LocalDateTime getCreatedAt() {

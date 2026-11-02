@@ -13,6 +13,7 @@ import ai.philterd.workspace.model.Batch;
 import ai.philterd.workspace.model.Document;
 import ai.philterd.workspace.model.FinalizationPolicy;
 import ai.philterd.workspace.repository.BatchRepository;
+import ai.philterd.workspace.repository.BlindReviewSpanRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.FinalizationPolicyRepository;
 import ai.philterd.workspace.repository.PendingUploadRepository;
@@ -48,6 +49,7 @@ public class SourceRetentionService {
 
     private final DocumentRepository documentRepository;
     private final SpanRepository spanRepository;
+    private final BlindReviewSpanRepository blindReviewSpanRepository;
     private final PendingUploadRepository pendingUploadRepository;
     private final BatchRepository batchRepository;
     private final FinalizationPolicyRepository finalizationPolicyRepository;
@@ -58,17 +60,19 @@ public class SourceRetentionService {
     @Autowired
     public SourceRetentionService(final DocumentRepository documentRepository,
                                   final SpanRepository spanRepository,
+                                  final BlindReviewSpanRepository blindReviewSpanRepository,
                                   final PendingUploadRepository pendingUploadRepository,
                                   final BatchRepository batchRepository,
                                   final FinalizationPolicyRepository finalizationPolicyRepository,
                                   final DocumentSearchService searchService,
                                   final AuditLogService auditLogService) {
-        this(documentRepository, spanRepository, pendingUploadRepository, batchRepository,
+        this(documentRepository, spanRepository, blindReviewSpanRepository, pendingUploadRepository, batchRepository,
                 finalizationPolicyRepository, searchService, auditLogService, Clock.systemUTC());
     }
 
     SourceRetentionService(final DocumentRepository documentRepository,
                            final SpanRepository spanRepository,
+                           final BlindReviewSpanRepository blindReviewSpanRepository,
                            final PendingUploadRepository pendingUploadRepository,
                            final BatchRepository batchRepository,
                            final FinalizationPolicyRepository finalizationPolicyRepository,
@@ -77,6 +81,7 @@ public class SourceRetentionService {
                            final Clock clock) {
         this.documentRepository = documentRepository;
         this.spanRepository = spanRepository;
+        this.blindReviewSpanRepository = blindReviewSpanRepository;
         this.pendingUploadRepository = pendingUploadRepository;
         this.batchRepository = batchRepository;
         this.finalizationPolicyRepository = finalizationPolicyRepository;
@@ -120,6 +125,8 @@ public class SourceRetentionService {
      */
     public void clearSource(final Document document, final FinalizationPolicy policy, final String actor) {
         final long spansDeleted = spanRepository.deleteByDocumentId(document.getId());
+        // A blind second review's copies hold the text too (#86).
+        blindReviewSpanRepository.deleteByDocumentId(document.getId());
         // A copy kept for retrying redaction has the document's id; usually it is gone once redaction succeeded.
         pendingUploadRepository.deleteById(document.getId());
         // The full-text index holds the original text too.

@@ -51,6 +51,7 @@ public class TriageController {
     private final BatchAccessService batchAccessService;
 
     private final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels;
+    private final ai.philterd.workspace.service.BlindDoubleReviewService blindReview;
 
     public TriageController(final DocumentRepository documentRepository,
                             final BatchRepository batchRepository,
@@ -58,7 +59,8 @@ public class TriageController {
                             final UserGroupsService userGroupsService,
                             final ApprovalRuleEvaluator approvalRuleEvaluator,
                             final BatchAccessService batchAccessService,
-                            final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels) {
+                            final ai.philterd.workspace.webapp.ui.BatchLabels batchLabels,
+                            final ai.philterd.workspace.service.BlindDoubleReviewService blindReview) {
         this.documentRepository = documentRepository;
         this.batchRepository = batchRepository;
         this.spanRepository = spanRepository;
@@ -66,6 +68,7 @@ public class TriageController {
         this.approvalRuleEvaluator = approvalRuleEvaluator;
         this.batchAccessService = batchAccessService;
         this.batchLabels = batchLabels;
+        this.blindReview = blindReview;
     }
 
     private static final Set<String> SORTABLE_FIELDS = Set.of("riskScore", "status", "batchId", "filename", "priority");
@@ -157,14 +160,13 @@ public class TriageController {
         }
 
         // Blind Double Review filter: APPROVED / REJECTED documents stay out of the
-        // review queue unless the document was selected for a blind second review and
-        // the current user is NOT the one who did the first review. Applied to the page
+        // review queue unless they wait on the current user's blind second review, or on
+        // their reconciling the two reviews (#86). Applied to the page
         // contents post-query. Pagination links keep the original totalElements so the
         // navigation footer stays consistent; the visible rows on a page may be fewer
         // than the page size when the filter takes effect, which is acceptable here.
-        final String currentEmail = authentication == null ? null : authentication.getName();
         final List<Document> visible = documents.getContent().stream()
-                .filter(doc -> isVisibleForBlindDoubleReview(doc, currentEmail))
+                .filter(doc -> isVisibleForBlindDoubleReview(doc, authentication))
                 .toList();
         final Page<Document> filteredPage = new PageImpl<>(visible, pageRequest, documents.getTotalElements());
 
@@ -186,14 +188,12 @@ public class TriageController {
     }
 
     /**
-     * Decide whether a document should appear on the review queue for the given user.
-     * APPROVED / REJECTED documents stay hidden unless they were selected for blind
-     * double review, the current user did not perform the first review, and the second
-     * review has not yet been completed. Once a second reviewer has reviewed the
-     * document the blind double review pass is finished and the document drops out of
-     * every reviewer's queue.
+     * Decide whether a document should appear on the review queue for the given user. APPROVED / REJECTED documents
+     * stay hidden unless they were selected for blind double review (#86) and wait on this user: to start the blind
+     * review (they have not been shown the document's spans), to finish the one they started, or to reconcile the
+     * two reviews.
      */
-    private static boolean isVisibleForBlindDoubleReview(final Document doc, final String currentEmail) {
+    private boolean isVisibleForBlindDoubleReview(final Document doc, final Authentication authentication) {
         final String status = doc.getStatus();
         if (!"APPROVED".equals(status) && !"REJECTED".equals(status)) {
             return true;
@@ -201,15 +201,9 @@ public class TriageController {
         if (!doc.isDoubleReview()) {
             return false;
         }
-        final String secondReviewer = doc.getSecondReviewer();
-        if (secondReviewer != null && !secondReviewer.isBlank()) {
-            return false;
-        }
-        final String firstReviewer = doc.getFirstReviewer();
-        if (firstReviewer == null || firstReviewer.isBlank()) {
-            return false;
-        }
-        return currentEmail != null && !firstReviewer.equalsIgnoreCase(currentEmail);
+        return ai.philterd.workspace.service.BlindDoubleReviewService.isBlindReviewer(authentication, doc)
+                || ai.philterd.workspace.service.BlindDoubleReviewService.mayStart(authentication, doc)
+                || blindReview.mayReconcile(authentication, doc);
     }
 
     @GetMapping("/batches")

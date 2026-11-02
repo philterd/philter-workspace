@@ -74,21 +74,19 @@ time you load the queue.
 
 Documents in batches with
 [Blind Double Review](../admin/batches.md#blind-double-review) follow a
-slightly modified visibility rule:
+different visibility rule. A document with status `APPROVED` or `REJECTED`
+normally drops out of the review queue. A document selected for blind double
+review stays in it for:
 
-- A document with status `APPROVED` or `REJECTED` normally drops out of the
-  review queue. For documents flagged for blind double review it stays
-  visible — but only to reviewers who **did not** perform the first review.
-  The first reviewer no longer sees it; another reviewer in the same group
-  sees it as an outstanding item until they (or someone else) provide the
-  second review.
-- The **Previous** and **Next** buttons on the review page also skip
-  double-review documents whose first review was performed by you, so you
-  are never paged into a document you have already reviewed.
+- reviewers who have not been shown its spans, until one of them starts the
+  blind second review;
+- the reviewer doing the blind second review, until they submit it;
+- approvers of its group, and administrators, who did neither review, until
+  the two reviews are reconciled.
 
-This implements the "blind" part of blind double review: the second
-reviewer reviews the same document independently, without the system ever
-asking the first reviewer to look at it again.
+The **Previous** and **Next** buttons on the review page skip double-review
+documents whose first review was performed by you, so you are never paged into
+a document you have already reviewed.
 
 ## Audit Log popup
 

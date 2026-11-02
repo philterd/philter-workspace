@@ -191,4 +191,52 @@ class ReviewPageReadOnlyTest extends WebMvcSliceMocks {
         }
         verify(documentLockService, never()).acquire(anyString(), anyString());
     }
+
+    /** Approved by another reviewer and selected for blind double review (#86). */
+    private void approvedForBlindReview() {
+        document.setStatus("APPROVED");
+        document.setDoubleReview(true);
+        document.setFirstReviewer("first@example.com");
+        document.getApprovedBy().add("first@example.com");
+    }
+
+    @Test
+    void someoneWhoMayDoTheBlindReviewSeesTheTextWithoutAnySpan() throws Exception {
+        approvedForBlindReview();
+
+        final String html = page("USER");
+
+        assertTrue(html.contains("const blindLanding = true;"));
+        assertTrue(html.contains("const originalRedactions = [];"), "no span, and so no decision, is sent");
+        assertTrue(html.contains("/review/d1/blind-review/start"));
+        assertFalse(html.contains("/review/d1/unapprove"), "the first review's decision is not shown");
+        assertFalse(html.contains("first@example.com"));
+        assertTrue(html.contains("Blind second review"));
+        verify(documentLockService, never()).acquire(anyString(), anyString());
+    }
+
+    @Test
+    void theBlindReviewerWorksOnTheirOwnCopy() throws Exception {
+        approvedForBlindReview();
+        document.setSecondReviewer("someone");
+        final ai.philterd.workspace.model.BlindReviewSpan copy = new ai.philterd.workspace.model.BlindReviewSpan();
+        copy.setId("c1");
+        copy.setDocumentId("d1");
+        copy.setType("person");
+        copy.setText("Jane Roe");
+        copy.setStatus("PENDING");
+        copy.setLocation(new Location(0, 8, 1, new Coordinates(0, 0, 0, 0)));
+        when(blindDoubleReviewService.copies("d1")).thenReturn(List.of(copy));
+
+        final String html = page("USER");
+
+        assertTrue(html.contains("const blindReview = true;"));
+        assertTrue(html.contains("\"id\":\"c1\""), "the copy is shown");
+        assertFalse(html.contains("\"id\":\"s1\""), "the document's own span is not");
+        assertTrue(html.contains("/review/d1/blind-review/submit"));
+        assertFalse(html.contains("/review/d1/approve") || html.contains("/review/d1/unapprove"));
+        assertFalse(html.contains("first@example.com"), "who decided the first review is not shown");
+        assertTrue(html.contains("let approvalsGiven = 0;"), "the first review's approvals are not shown");
+        verify(documentLockService, never()).acquire(anyString(), anyString());
+    }
 }

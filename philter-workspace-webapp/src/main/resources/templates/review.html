@@ -314,7 +314,8 @@
             <div th:if="${success}"
                  class="mb-4 p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700"
                  th:text="${success}">Success</div>
-            <div class="focus-hide mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium"
+            <div th:if="${blindView == 'RECORD'}"
+                 class="focus-hide mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium"
                  th:classappend="${approvalsGiven >= approvalsRequired}
                     ? 'bg-green-50 border-green-200 text-green-800'
                     : 'bg-blue-50 border-blue-200 text-blue-800'">
@@ -406,10 +407,12 @@
                         <span th:text="${document.filename}">Document</span>
                     </h2>
                     <div class="focus-hide text-sm text-gray-600 mt-1 flex items-center gap-3 flex-wrap">
-                        <span>Status: <span class="font-medium" th:text="${document.status}">STATUS</span></span>
+                        <span th:if="${blindView == 'RECORD'}">Status: <span class="font-medium" th:text="${document.status}">STATUS</span></span>
+                        <span th:if="${blindView != 'RECORD'}">Status: <span class="font-medium">Blind second review</span></span>
                         <span class="flex items-center gap-2">
                             Risk Score: <span class="font-medium" th:text="${#numbers.formatDecimal(document.riskScore, 1, 2)}">0.00</span>
                             <button id="explainBtn" type="button" th:disabled="${readOnly}"
+                                    th:classappend="${blindView != 'RECORD'} ? 'hidden'"
                                     th:title="${readOnly} ? 'Auditors have read-only access' : 'Explain the risk score with the configured AI model'"
                                     class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"
@@ -433,13 +436,21 @@
                         <span th:if="${document.appliedPolicyName != null}">Policy:
                             <span class="font-medium" th:text="${document.appliedPolicyName}">default</span><span th:if="${document.appliedPolicyVersion != null}" th:text="| (version ${document.appliedPolicyVersion})|"> (version 1)</span></span>
                         <button id="editCaseBtn" type="button" sec:authorize="!hasRole('AUDITOR')"
-                                th:if="${document.status != 'FINALIZED' and document.status != 'PENDING' and document.status != 'PROCESSING'}"
+                                th:if="${document.status != 'FINALIZED' and document.status != 'PENDING' and document.status != 'PROCESSING' and blindView == 'RECORD'}"
                                 class="px-2.5 py-1 text-xs font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">
                             Edit case
                         </button>
                     </div>
                 </div>
-                <div class="flex items-center gap-2"
+                <div class="flex items-center gap-2" th:if="${blindView == 'BLIND'}">
+                    <form th:action="@{/review/{id}/blind-review/submit(id=${document.id})}" method="post" class="inline focus-hide">
+                        <button type="submit"
+                                class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition duration-200">
+                            Submit blind review
+                        </button>
+                    </form>
+                </div>
+                <div class="flex items-center gap-2" th:if="${blindView == 'RECORD'}"
                      th:with="terminal=${ {'APPROVED','REJECTED','FAILED','FINALIZED'} }">
                     <div class="focus-hide flex items-center space-x-2">
                         <div th:if="${terminal.contains(document.status)}" class="flex items-center space-x-3">
@@ -489,13 +500,13 @@
                 </div>
             </div>
 
-            <div th:if="${document.status == 'APPROVED'}"
+            <div th:if="${document.status == 'APPROVED' and blindView == 'RECORD'}"
                  class="focus-hide mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900">
                 This document is <span class="font-semibold">APPROVED</span> and its PII spans are locked.
                 Click <span class="font-semibold">Unapprove</span> above to add, edit, or remove spans.
             </div>
 
-            <div th:if="${document.status == 'REJECTED'}"
+            <div th:if="${document.status == 'REJECTED' and blindView == 'RECORD'}"
                  class="focus-hide mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900">
                 This document is <span class="font-semibold">REJECTED</span> and its PII spans are locked.
                 Click <span class="font-semibold">Unreject</span> above to add, edit, or remove spans.
@@ -504,6 +515,95 @@
             <div th:if="${document.status == 'FINALIZED'}"
                  class="focus-hide mb-4 p-3 rounded-lg bg-gray-100 border border-gray-300 text-sm text-gray-800">
                 This document is <span class="font-semibold">FINALIZED</span>. No further changes can be made.
+            </div>
+
+            <!-- Blind double review (#86). -->
+            <div th:if="${blindView == 'BLIND'}"
+                 class="focus-hide mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-900">
+                <span class="font-semibold">Blind second review.</span>
+                You are reviewing Philter's detections on your own copy. The first review stays hidden until both
+                reviews are recorded, and nothing you do here changes it. Accept or refuse every span, add any PII
+                that was missed, then click <span class="font-semibold">Submit blind review</span>.
+            </div>
+            <div th:if="${blindView == 'LANDING'}"
+                 class="focus-hide mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-900 space-y-2">
+                <p>
+                    <span class="font-semibold">This document was selected for a blind second review.</span>
+                    Its spans are hidden so the second review is independent of the first.
+                </p>
+                <p th:if="${blindInProgress}">
+                    <span th:if="${blindReviewer != ''}"><span class="font-semibold" th:text="${blindReviewer}">reviewer</span> is doing it.</span>
+                    <span th:unless="${blindReviewer != ''}">Another reviewer is doing it.</span>
+                </p>
+                <div class="flex flex-wrap items-center gap-2">
+                    <form th:if="${blindMayStart}" th:action="@{/review/{id}/blind-review/start(id=${document.id})}" method="post" class="inline">
+                        <button type="submit"
+                                class="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg">
+                            Start blind review
+                        </button>
+                    </form>
+                    <form th:if="${blindInProgress and blindMayManage}" th:action="@{/review/{id}/blind-review/release(id=${document.id})}" method="post" class="inline">
+                        <button type="submit"
+                                class="px-3 py-1.5 border border-blue-700 text-blue-900 hover:bg-blue-100 text-sm font-medium rounded-lg">
+                            Release blind review
+                        </button>
+                    </form>
+                    <form th:if="${blindMayManage}" th:action="@{/review/{id}/blind-review/reveal(id=${document.id})}" method="post" class="inline">
+                        <button type="submit"
+                                title="You will no longer be able to do this document's blind second review"
+                                class="px-3 py-1.5 border border-gray-300 text-gray-700 hover:bg-gray-100 text-sm font-medium rounded-lg">
+                            Show the first review
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div th:if="${blindView == 'RECORD' and blindOpen and (document.status == 'APPROVED' or document.status == 'REJECTED')}"
+                 class="focus-hide mb-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-900 flex items-center justify-between gap-3 flex-wrap">
+                <span>
+                    This document awaits a blind second review<th:block th:if="${blindInProgress and blindReviewer != ''}"> by
+                    <span class="font-semibold" th:text="${blindReviewer}">reviewer</span></th:block>. It can be
+                    finalized once both reviews are recorded and reconciled.
+                </span>
+                <form th:if="${blindInProgress and blindMayManage}" th:action="@{/review/{id}/blind-review/release(id=${document.id})}" method="post" class="inline">
+                    <button type="submit"
+                            class="px-3 py-1.5 border border-blue-700 text-blue-900 hover:bg-blue-100 text-sm font-medium rounded-lg">
+                        Release blind review
+                    </button>
+                </form>
+            </div>
+            <div th:if="${blindShowComparison}"
+                 class="focus-hide mb-4 p-4 rounded-lg bg-white border border-gray-200 text-sm text-gray-800">
+                <div class="flex items-center justify-between gap-3 flex-wrap mb-2">
+                    <h3 class="font-semibold text-gray-900">Blind double review</h3>
+                    <form th:if="${blindMayReconcile}" th:action="@{/review/{id}/blind-review/reconcile(id=${document.id})}" method="post" class="inline">
+                        <button type="submit"
+                                class="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg">
+                            Mark reconciled
+                        </button>
+                    </form>
+                </div>
+                <p th:if="${blindAwaitingReconciliation}" class="text-gray-600 mb-2">
+                    Both reviews are recorded. Where they differ, change the document's spans as needed (Unapprove or
+                    Unreject first), approve or reject it again, then mark the reviews reconciled. An approver of the
+                    group who did neither review marks them reconciled.
+                </p>
+                <p th:unless="${blindAwaitingReconciliation}" class="text-gray-600 mb-2">
+                    Reconciled by <span class="font-medium" th:text="${document.doubleReviewReconciledBy}">approver</span>
+                    at <span th:text="${@timestampFormatter.format(document.doubleReviewReconciledAt)}">time</span>.
+                </p>
+                <p th:if="${#lists.isEmpty(blindDisagreements)}" class="text-gray-600">The document's spans and the blind review agree.</p>
+                <table th:unless="${#lists.isEmpty(blindDisagreements)}" class="w-full text-left text-sm">
+                    <thead class="text-xs uppercase text-gray-500">
+                        <tr><th class="py-1 pr-3">Text</th><th class="py-1 pr-3">Document</th><th class="py-1">Blind review</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        <tr th:each="d : ${blindDisagreements}">
+                            <td class="py-1 pr-3 font-mono" th:text="${d.text}">text</td>
+                            <td class="py-1 pr-3" th:text="${d.firstType == null ? 'Not redacted' : d.firstType}">type</td>
+                            <td class="py-1" th:text="${d.secondType == null ? 'Not redacted' : (d.secondType == '' ? 'Redacted' : d.secondType)}">type</td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
 
             <!-- Delivery of the finalized output to the batch's destination (#24). -->
@@ -572,7 +672,7 @@
                     <div class="mt-4">
                         <h3 class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Tools</h3>
                         <div class="flex flex-col gap-2">
-                            <button id="commentsBtn" type="button"
+                            <button id="commentsBtn" type="button" th:classappend="${blindView != 'RECORD'} ? 'hidden'"
                                     class="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-sm text-gray-700 hover:bg-gray-100 font-medium rounded-lg transition duration-200 w-full">
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                      stroke="currentColor" stroke-width="2" class="h-4 w-4 shrink-0">
@@ -715,15 +815,20 @@
         const redactLikeMinLength = /*[[${redactLikeMinLength}]]*/ 3;
         const defaultExplainInstanceId = /*[[${defaultExplainInstanceId}]]*/ null;
         const defaultExplainModel = /*[[${defaultExplainModel}]]*/ null;
-        const secondOpinionConfigured = /*[[${secondOpinionConfigured}]]*/ false;
-        const documentApproved = /*[[${document.status == 'APPROVED'}]]*/ false;
-        const documentRejected = /*[[${document.status == 'REJECTED'}]]*/ false;
+        // Blind double review (#86): the blind reviewer edits their own copy whatever the document's status, and
+        // someone who may yet do the blind review sees no spans.
+        const blindReview = /*[[${blindView == 'BLIND'}]]*/ false;
+        const blindLanding = /*[[${blindView == 'LANDING'}]]*/ false;
+        const secondOpinionConfigured = /*[[${secondOpinionConfigured}]]*/ false && !blindReview;
+        const documentApproved = /*[[${document.status == 'APPROVED'}]]*/ false && !blindReview;
+        const documentRejected = /*[[${document.status == 'REJECTED'}]]*/ false && !blindReview;
         const documentFinalized = /*[[${document.status == 'FINALIZED'}]]*/ false;
         const lockedByOther = /*[[${lockedByOther}]]*/ false;
         const lockHolder = /*[[${lockHolder}]]*/ '';
         // Auditors read only (#60): every span control follows documentLocked, and the server refuses their writes.
         const readOnly = /*[[${readOnly}]]*/ false;
-        const documentLocked = readOnly || documentApproved || documentRejected || documentFinalized || lockedByOther;
+        const documentLocked = readOnly || blindLanding || documentApproved || documentRejected || documentFinalized
+            || lockedByOther;
         const lockedReason = readOnly ? 'Auditors have read-only access' : documentFinalized
             ? 'Document is FINALIZED — no further changes allowed'
             : (documentApproved
@@ -990,9 +1095,11 @@
                         ? `No unreviewed entries. ${secondOpinionCount} still ${secondOpinionCount === 1 ? 'awaits' : 'await'} a second opinion.`
                         : (documentLocked
                             ? 'No unreviewed entries: every entry has a decision.'
-                            : (approvedByCurrentUser
+                            : (blindReview
+                                ? 'No unreviewed entries: every entry has a decision, so the blind review is ready to submit.'
+                                : (approvedByCurrentUser
                                 ? 'No unreviewed entries: every entry has a decision. You have approved this document; the next approval must come from another reviewer.'
-                                : 'No unreviewed entries: every entry has a decision, so the document is ready to approve.'));
+                                : 'No unreviewed entries: every entry has a decision, so the document is ready to approve.')));
                 } else {
                     empty = 'No spans are awaiting a second opinion.';
                 }
@@ -1057,10 +1164,10 @@
                                     class="px-2 py-1 text-xs font-semibold border-l border-gray-300 ${isRejected ? 'bg-red-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}"${lockedAttr}${lockedTitle}>
                                 Refuse
                             </button>
-                            <button type="button" data-set-status="NEEDS_SECOND_OPINION" data-span-id="${escapeHtml(item.id)}"
+                            ${blindReview ? '' : `<button type="button" data-set-status="NEEDS_SECOND_OPINION" data-span-id="${escapeHtml(item.id)}"
                                     class="px-2 py-1 text-xs font-semibold border-l border-gray-300 ${isSecondOpinion ? 'bg-amber-500 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}"${lockedAttr}${spanLocked ? lockedTitle : ' title="Need a second opinion from another reviewer"'}>
                                 2nd Opinion
-                            </button>
+                            </button>`}
                             <button type="button" data-reset-span="${escapeHtml(item.id)}"
                                     title="${resetTitle}"
                                     class="px-2 py-1 text-xs font-semibold border-l border-gray-300 bg-white text-gray-500 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed"${resetAttr}>
@@ -1230,7 +1337,8 @@
 
             // Pessimistic-lock pulse loop. Skip when this user doesn't hold the lock
             // (read-only mode, or document is in a terminal status).
-            if (!readOnly && !lockedByOther && !documentApproved && !documentRejected && !documentFinalized && documentId) {
+            if (!readOnly && !blindReview && !blindLanding && !lockedByOther && !documentApproved && !documentRejected
+                    && !documentFinalized && documentId) {
                 const PULSE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
                 const pulse = async () => {
                     try {

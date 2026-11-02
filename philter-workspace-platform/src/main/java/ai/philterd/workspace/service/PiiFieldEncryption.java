@@ -11,6 +11,7 @@ package ai.philterd.workspace.service;
 
 import ai.philterd.workspace.model.AuditLog;
 import ai.philterd.workspace.model.BackgroundJob;
+import ai.philterd.workspace.model.BlindReviewSpan;
 import ai.philterd.workspace.model.DataImportLogEntry;
 import ai.philterd.workspace.model.DetectionRule;
 import ai.philterd.workspace.model.Document;
@@ -112,18 +113,20 @@ public final class PiiFieldEncryption {
      * The encrypted fields as paths in the stored document, for {@link #encryptStored}. {@code name[]} is each
      * element of a list. They are the fields {@link #apply} lists, as the stores name them.
      */
-    static final Map<Class<?>, List<String>> STORED_PATHS = Map.of(
-            Document.class, List.of("originalText", "redactedText", "failureMessage",
-                    "caseMetadata.caseNumber", "caseMetadata.filer"),
-            Span.class, List.of("text"),
-            GeneralSettings.class, List.of("opensearchPassword"),
-            DocumentComment.class, List.of("text"),
-            DetectionRule.class, List.of("text"),
-            RedactionCertificate.class, List.of("documentFilename", "overturns[].spanText", "overturns[].reason"),
-            NotificationSettings.class, List.of("password"),
-            AuditLog.class, List.of("details.reason"),
-            BackgroundJob.class, List.of("errorMessage", "failureMessages[]"),
-            DataImportLogEntry.class, List.of("message"));
+    static final Map<Class<?>, List<String>> STORED_PATHS = Map.ofEntries(
+            Map.entry(Document.class, List.of("originalText", "redactedText", "failureMessage",
+                    "caseMetadata.caseNumber", "caseMetadata.filer")),
+            Map.entry(Span.class, List.of("text")),
+            Map.entry(BlindReviewSpan.class, List.of("text")),
+            Map.entry(GeneralSettings.class, List.of("opensearchPassword")),
+            Map.entry(DocumentComment.class, List.of("text")),
+            Map.entry(DetectionRule.class, List.of("text")),
+            Map.entry(RedactionCertificate.class,
+                    List.of("documentFilename", "overturns[].spanText", "overturns[].reason")),
+            Map.entry(NotificationSettings.class, List.of("password")),
+            Map.entry(AuditLog.class, List.of("details.reason")),
+            Map.entry(BackgroundJob.class, List.of("errorMessage", "failureMessages[]")),
+            Map.entry(DataImportLogEntry.class, List.of("message")));
 
     private PiiFieldEncryption() {}
 

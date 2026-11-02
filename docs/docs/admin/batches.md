@@ -176,27 +176,69 @@ If you need a different setting, create a new batch.
 
 ### Reviewer experience
 
-The first reviewer sees and reviews the document exactly as they would any
-other document. Once they approve or reject it, the document moves out of
-their queue.
+A document selected for blind double review is reviewed twice, independently,
+and the two reviews are then reconciled. It cannot be finalized until they
+are.
 
-For a document flagged for blind double review, the system records
-**who did the first review** and uses that to keep the second review blind:
+**The first review** is the usual one: a reviewer works on the document's
+spans and approves or rejects it. When the document is redacted, Philter
+Workspace also keeps Philter's detections as they arrived, for the second
+review to start from.
 
-- **My Queue** continues to show the document — but only to reviewers
-  *other than* the first reviewer. The first reviewer no longer sees it
-  (it's an APPROVED or REJECTED document and would normally drop out of
-  their queue anyway). Other reviewers in the same group see it as an
-  outstanding item, even though its status is APPROVED or REJECTED, until
-  one of them provides the second review.
-- The **Previous** and **Next** buttons on the review page skip
-  double-review documents whose first review was performed by the current
-  user, so a reviewer is never paged into a document they've already
-  reviewed.
+**The blind second review.** Once the first review is recorded, the document
+appears in **My Queue** for reviewers who have not been shown its spans.
+Anyone shown the document's spans before the second review was recorded,
+on its review page, in its audit history or audit trail, or through
+`GET /api/v1/documents/{id}/spans` or `/audit`, counts as shown, as do the
+first reviewer and anyone who approved it. None of these is available to the
+reviewer doing the blind review.
 
-The second reviewer's decisions are captured as an independent annotation
-set so they can be compared against the first reviewer's set in the
-[IAA report](reports.md#inter-annotator-agreement-iaa).
+- Opening the document shows its text without any spans, and a **Start blind
+  review** button. The first review's spans, its decision, and who made it
+  are not shown.
+- **Start blind review** gives the reviewer their own copy of Philter's
+  detections, every one unreviewed. They review it as they would any document:
+  accept or refuse each span, choose exemption codes, add spans for PII that
+  was missed, move boundaries, and use Redact All Like This. Changes go to
+  their copy only; the document's spans and approvals are untouched, and the
+  first reviewer never sees the copy.
+- Only one person does the blind review at a time. The document leaves the
+  other reviewers' queues once it is started.
+- **Submit blind review** records it once every span in the copy is accepted
+  or refused.
+
+A blind review cannot adjudicate spans, ask for a second opinion, or use Ask
+AI or Explain. While it is in progress the blind reviewer cannot approve,
+reject, unapprove, or unreject the document.
+
+An approver of the batch's group, or an administrator, can **Release blind
+review** to discard a blind review in progress, for example when its reviewer
+is unavailable, so someone else can start it. They can also **Show the first
+review**, after which they can no longer do the blind review themselves.
+
+**Reconciling.** Once both reviews are recorded, the review page shows
+approvers and administrators where the document's spans and the blind review
+differ: text redacted in one and not the other, or redacted as different
+types. To reconcile:
+
+1. Change the document's spans where the blind review is right: **Unapprove**
+   or **Unreject** the document, edit its spans, and approve or reject it
+   again.
+2. Click **Mark reconciled**.
+
+The reviews are reconciled by an approver of the group, or an administrator,
+who did neither review. The document then drops out of the queue and can be
+finalized.
+
+The first and second reviews are compared, as recorded, in the
+[IAA report](reports.md#inter-annotator-agreement-iaa). Reconciling changes
+the document, not the report.
+
+A document selected before Philter Workspace kept the detections starts its
+blind review from the document's detected spans: those added by hand are left
+out, and moved spans are at the boundaries they were detected at. A span whose
+type the first reviewer changed keeps the new type, since the detected type
+was not kept.
 
 ## Visibility scope (admin checkbox)
 

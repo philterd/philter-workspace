@@ -38,15 +38,18 @@ public class ExportController {
     private final SpanRepository spanRepository;
     private final DocumentRepository documentRepository;
     private final DocumentAccessService documentAccessService;
+    private final ai.philterd.workspace.service.BlindDoubleReviewService blindReview;
 
     public ExportController(final DocumentFinalizationService finalizationService,
                             final SpanRepository spanRepository,
                             final DocumentRepository documentRepository,
-                            final DocumentAccessService documentAccessService) {
+                            final DocumentAccessService documentAccessService,
+                            final ai.philterd.workspace.service.BlindDoubleReviewService blindReview) {
         this.finalizationService = finalizationService;
         this.spanRepository = spanRepository;
         this.documentRepository = documentRepository;
         this.documentAccessService = documentAccessService;
+        this.blindReview = blindReview;
     }
 
     @PostMapping(value = "/documents/{id}/finalize",
@@ -69,6 +72,12 @@ public class ExportController {
         final Document document = documentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
+        // The spans' statuses are the first review's decisions (#86).
+        try {
+            blindReview.showSpans(authentication, document);
+        } catch (ai.philterd.workspace.service.BlindDoubleReviewService.Refused e) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, e.getMessage());
+        }
         final List<Span> spans = spanRepository.findByDocumentId(id);
         return spans.stream().map(s -> Map.<String, Object>of(
             "text", s.getText(),

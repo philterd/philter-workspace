@@ -12,7 +12,11 @@ package ai.philterd.workspace.store;
 import ai.philterd.workspace.model.AuditLog;
 import ai.philterd.workspace.model.BackgroundJob;
 import ai.philterd.workspace.model.Batch;
+import ai.philterd.workspace.model.BlindReviewSpan;
+import ai.philterd.workspace.model.Coordinates;
+import ai.philterd.workspace.model.DetectedSpan;
 import ai.philterd.workspace.model.Document;
+import ai.philterd.workspace.model.Location;
 import ai.philterd.workspace.model.DocumentComment;
 import ai.philterd.workspace.model.GeneralSettings;
 import ai.philterd.workspace.model.Group;
@@ -26,6 +30,7 @@ import ai.philterd.workspace.repository.BatchRepository;
 import ai.philterd.workspace.repository.DocumentCommentRepository;
 import ai.philterd.workspace.repository.GeneralSettingsRepository;
 import ai.philterd.workspace.repository.RedactionCertificateRepository;
+import ai.philterd.workspace.repository.BlindReviewSpanRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.GroupRepository;
 import ai.philterd.workspace.repository.InboxMessageRepository;
@@ -106,7 +111,7 @@ public abstract class StoreContract {
     @Test
     void everyRepositoryIsAvailable() throws Exception {
         final List<Class<?>> repos = repositoryInterfaces();
-        assertEquals(29, repos.size());
+        assertEquals(30, repos.size());
         for (Class<?> repo : repos) {
             assertNotNull(repository(repo), repo.getSimpleName());
         }
@@ -823,6 +828,55 @@ public abstract class StoreContract {
                 .map(ai.philterd.workspace.model.DetectionRule::getId).toList());
         assertEquals("Acme Dental", rules.findByTextKey("key-1").get(0).getText());
         assertTrue(rules.findByTextKey("key-2").isEmpty());
+    }
+
+    @Test
+    void blindReviewCopiesAreKeptApartFromSpansAndEncryptedAtRest() {
+        // #86: a blind second review's copies are in their own collection, so nothing reading a document's spans
+        // sees them, and their text is encrypted like a span's.
+        final SpanRepository spans = repository(SpanRepository.class);
+        final BlindReviewSpanRepository copies = repository(BlindReviewSpanRepository.class);
+        final BlindReviewSpan copy = new BlindReviewSpan();
+        copy.setId("c1");
+        copy.setDocumentId("d-86");
+        copy.setType("ssn");
+        copy.setText("123-45-6789");
+        copy.setStatus("PENDING");
+        copy.setLocation(new Location(4, 15, 1, new Coordinates(0, 0, 0, 0)));
+        copies.save(copy);
+
+        assertFalse(raw(BlindReviewSpan.class, "c1").contains("123-45-6789"));
+        final List<BlindReviewSpan> found = copies.findByDocumentId("d-86");
+        assertEquals(1, found.size());
+        assertEquals("123-45-6789", found.get(0).getText());
+        assertEquals(15, found.get(0).getLocation().characterEnd());
+        assertTrue(spans.findByDocumentId("d-86").isEmpty(), "never among the document's spans");
+        assertTrue(spans.findById("c1").isEmpty());
+
+        assertEquals(1, copies.deleteByDocumentId("d-86"));
+        assertTrue(copies.findById("c1").isEmpty());
+    }
+
+    @Test
+    void documentsKeepTheirBlindReviewState() {
+        final DocumentRepository docs = repository(DocumentRepository.class);
+        final Document d = document("b", "APPROVED", "f.txt", LocalDateTime.now());
+        d.setDoubleReview(true);
+        d.setDoubleReviewDetections(List.of(new DetectedSpan("person", 0.75,
+                new Location(0, 4, 2, new Coordinates(1, 2, 3, 4)))));
+        d.getFirstReviewSeenBy().add("someone@example.com");
+        d.setSecondReviewer("second@example.com");
+        d.setSecondReviewStartedAt(java.time.Instant.parse("2026-11-01T10:00:00Z"));
+        docs.save(d);
+
+        final Document read = docs.findById(d.getId()).orElseThrow();
+        assertEquals(1, read.getDoubleReviewDetections().size());
+        assertEquals("person", read.getDoubleReviewDetections().get(0).getType());
+        assertEquals(0.75, read.getDoubleReviewDetections().get(0).getConfidence());
+        assertEquals(2, read.getDoubleReviewDetections().get(0).getLocation().page());
+        assertEquals(List.of("someone@example.com"), read.getFirstReviewSeenBy());
+        assertEquals("second@example.com", read.getSecondReviewer());
+        assertEquals(java.time.Instant.parse("2026-11-01T10:00:00Z"), read.getSecondReviewStartedAt());
     }
 
     @Test

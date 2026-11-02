@@ -86,8 +86,8 @@ public class DocumentFinalizationService {
      * Finalizes {@code document}, which the caller has already checked {@code actor} may access, and returns its
      * redacted text. {@code via} says which path finalized it ({@code review} or {@code api}) for the audit log.
      *
-     * @throws FinalizationRefused when another person holds the review lock, the document is not APPROVED, or its
-     *                             source text is gone
+     * @throws FinalizationRefused when another person holds the review lock, the document is not APPROVED, its
+     *                             blind double review is not reconciled, or its source text is gone
      */
     public String finalizeDocument(final Document document, final String actor, final String via) {
         final String holder = changeGuard.heldByOther(document, actor);
@@ -96,6 +96,11 @@ public class DocumentFinalizationService {
         }
         if (!"APPROVED".equals(document.getStatus())) {
             throw new FinalizationRefused(HttpStatus.CONFLICT, "Only APPROVED documents can be finalized.");
+        }
+        // Blind double review (#86): both reviews recorded and reconciled first.
+        final String blindReview = BlindDoubleReviewService.finalizationRefusal(document);
+        if (blindReview != null) {
+            throw new FinalizationRefused(HttpStatus.CONFLICT, blindReview);
         }
         // A finalization policy clears the source to null. An empty document is finalized as it is.
         final String originalText = document.getOriginalText();

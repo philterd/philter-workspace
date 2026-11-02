@@ -89,7 +89,8 @@ class SecondOpinionsControllerTest {
         when(auditLogService.hashForAudit(any())).thenReturn("");
         controller = new SecondOpinionsController(spanRepository, documentRepository, batchRepository,
                 complianceProfileRepository, userGroupsService, auditLogRepository,
-                auditLogQueryService, auditLogService, new ObjectMapper());
+                auditLogQueryService, auditLogService, new ObjectMapper(),
+                org.mockito.Mockito.mock(ai.philterd.workspace.service.BlindDoubleReviewService.class));
     }
 
     private static Authentication admin() {

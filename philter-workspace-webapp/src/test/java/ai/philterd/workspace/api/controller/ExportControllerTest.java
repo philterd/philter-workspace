@@ -57,9 +57,12 @@ class ExportControllerTest {
         documentRepository = mock(DocumentRepository.class);
         batchRepository = mock(BatchRepository.class);
         userGroupsService = TestDoubles.userGroups();
-        controller = new ExportController(finalizationService, spanRepository,
-                documentRepository,
-                TestDoubles.documentAccess(batchRepository, documentRepository, userGroupsService));
+        final ai.philterd.workspace.service.DocumentAccessService access =
+                TestDoubles.documentAccess(batchRepository, documentRepository, userGroupsService);
+        controller = new ExportController(finalizationService, spanRepository, documentRepository, access,
+                new ai.philterd.workspace.service.BlindDoubleReviewService(documentRepository, spanRepository,
+                        mock(ai.philterd.workspace.repository.BlindReviewSpanRepository.class), access,
+                        mock(ai.philterd.workspace.service.AuditLogService.class)));
 
         final Document doc = approvedDoc("d1");
         when(documentRepository.findById("d1")).thenReturn(Optional.of(doc));
@@ -113,6 +116,27 @@ class ExportControllerTest {
         assertEquals(0.95, result.get(0).get("confidence"));
         assertEquals("APPROVED", result.get(0).get("status"));
         assertEquals("PENDING", result.get(1).get("status"));
+    }
+
+    @Test
+    void auditIsRefusedToTheBlindReviewerAndRecordsWhoeverElseReadsIt() {
+        // #86: the statuses are the first review's decisions.
+        final Document doc = approvedDoc("d1");
+        doc.setDoubleReview(true);
+        doc.setFirstReviewer("first@example.com");
+        doc.setSecondReviewer("second@example.com");
+        when(documentRepository.findById("d1")).thenReturn(Optional.of(doc));
+        when(documentRepository.save(org.mockito.ArgumentMatchers.any(Document.class)))
+                .thenAnswer(i -> i.getArgument(0));
+        when(spanRepository.findByDocumentId("d1")).thenReturn(List.of());
+
+        final org.springframework.web.server.ResponseStatusException refused = assertThrows(
+                org.springframework.web.server.ResponseStatusException.class,
+                () -> controller.audit("d1", TestAuth.admin("second@example.com")));
+        assertEquals(409, refused.getStatusCode().value());
+
+        controller.audit("d1", ADMIN);
+        assertEquals(List.of("admin@example.com"), doc.getFirstReviewSeenBy());
     }
 
     @Test

@@ -10,14 +10,17 @@
 package ai.philterd.workspace.api.controller;
 
 import ai.philterd.workspace.dto.SpanUpdateRequest;
+import ai.philterd.workspace.model.BlindReviewSpan;
 import ai.philterd.workspace.model.Coordinates;
 import ai.philterd.workspace.model.Document;
 import ai.philterd.workspace.model.Location;
 import ai.philterd.workspace.model.PiiTypes;
 import ai.philterd.workspace.model.Span;
+import ai.philterd.workspace.repository.BlindReviewSpanRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.SpanRepository;
 import ai.philterd.workspace.service.AuditLogService;
+import ai.philterd.workspace.service.BlindDoubleReviewService;
 import ai.philterd.workspace.service.DetectionRuleService;
 import ai.philterd.workspace.service.DocumentAccessService;
 import org.springframework.security.core.Authentication;
@@ -59,19 +62,82 @@ public class ReviewController {
     private final DetectionRuleService detectionRuleService;
 
     private final ai.philterd.workspace.service.DocumentChangeGuard changeGuard;
+    private final BlindReviewSpanRepository copyRepository;
+    private final BlindDoubleReviewService blindReview;
 
     public ReviewController(final SpanRepository spanRepository,
                             final DocumentRepository documentRepository,
                             final DocumentAccessService documentAccessService,
                             final AuditLogService auditLogService,
                             final DetectionRuleService detectionRuleService,
-                            final ai.philterd.workspace.service.DocumentChangeGuard changeGuard) {
+                            final ai.philterd.workspace.service.DocumentChangeGuard changeGuard,
+                            final BlindReviewSpanRepository copyRepository,
+                            final BlindDoubleReviewService blindReview) {
         this.spanRepository = spanRepository;
         this.documentRepository = documentRepository;
         this.documentAccessService = documentAccessService;
         this.auditLogService = auditLogService;
         this.detectionRuleService = detectionRuleService;
         this.changeGuard = changeGuard;
+        this.copyRepository = copyRepository;
+        this.blindReview = blindReview;
+    }
+
+    /**
+     * The span a request names, with its document: one of the document's spans, or a blind second review's copy
+     * (#86), which only the person doing that review can reach. Anyone else is told the span does not exist.
+     */
+    private record Target(Span span, Document document, boolean copy) {
+    }
+
+    private Target target(final String id, final Authentication authentication) {
+        final Span span = spanRepository.findById(id).orElse(null);
+        if (span != null) {
+            return new Target(span, documentAccessService.loadAccessibleParentForSpan(span, authentication), false);
+        }
+        final BlindReviewSpan copy = copyRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
+        final Document document = documentAccessService.loadAccessibleParentForSpan(copy, authentication);
+        if (!blindReview.isBlindReviewer(authentication, document)) {
+            throw new ResponseStatusException(NOT_FOUND, "Span not found.");
+        }
+        return new Target(copy, document, true);
+    }
+
+    /** The other spans of the same review: the document's, or the blind review's copies. */
+    private List<? extends Span> siblings(final Target t) {
+        return t.copy() ? copyRepository.findByDocumentId(t.document().getId())
+                : spanRepository.findByDocumentId(t.document().getId());
+    }
+
+    private Span save(final Target t, final Span span) {
+        return t.copy() ? copyRepository.save((BlindReviewSpan) span) : spanRepository.save(span);
+    }
+
+    /**
+     * Audits a change to {@code t}'s span. A change in a blind review says so, and leaves the document's approvals
+     * alone, since the document's spans did not change.
+     */
+    private void audited(final Target t, final String action, final String spanId, final Map<String, Object> details,
+                         final String actor, final String change) {
+        final Map<String, Object> all = new LinkedHashMap<>(details);
+        if (t.copy()) {
+            all.put("blindReview", true);
+        }
+        auditLogService.log(action, "Span", spanId, all);
+        if (!t.copy() && change != null) {
+            changeGuard.spansChanged(t.document(), actor, change, spanId);
+        }
+    }
+
+    /** What a blind review cannot do: adjudicate, which is an approver's, or ask for a second opinion (#86). */
+    private static void requireBlindChange(final Boolean adjudicate, final String status) {
+        if (Boolean.TRUE.equals(adjudicate)) {
+            throw new ResponseStatusException(BAD_REQUEST, "A blind review does not adjudicate spans.");
+        }
+        if (Span.STATUS_NEEDS_SECOND_OPINION.equals(status)) {
+            throw new ResponseStatusException(BAD_REQUEST, "A blind review cannot ask for a second opinion.");
+        }
     }
 
     /**
@@ -133,6 +199,11 @@ public class ReviewController {
                     "Document source has been deleted by the batch's finalization policy "
                             + "and is no longer available for review.");
         }
+        if (blindReview.isBlindReviewer(authentication, document)) {
+            return new ArrayList<>(blindReview.copies(id));
+        }
+        // Whoever is shown the document's spans cannot then do its blind second review (#86).
+        blindReview.noteSeen(authentication, document);
         return spanRepository.findByDocumentId(id);
     }
 
@@ -162,7 +233,11 @@ public class ReviewController {
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND,
                         "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
-        requireChangeable(document, authentication);
+        // The blind reviewer adds to their own copy (#86).
+        final boolean copy = blindReview.isBlindReviewer(authentication, document);
+        if (!copy) {
+            requireChangeable(document, authentication);
+        }
         final String original = document.getOriginalText() == null ? "" : document.getOriginalText();
         if (end > original.length()) {
             throw new ResponseStatusException(BAD_REQUEST, "Range exceeds document length.");
@@ -172,7 +247,7 @@ public class ReviewController {
             throw new ResponseStatusException(BAD_REQUEST, "Selection is empty.");
         }
 
-        final Span span = new Span();
+        final Span span = copy ? new BlindReviewSpan() : new Span();
         span.setId(UUID.randomUUID().toString());
         span.setDocumentId(documentId);
         span.setType(normalized);
@@ -182,17 +257,17 @@ public class ReviewController {
         span.setManuallyCreated(true);
         span.setCreatedAt(LocalDateTime.now());
         span.changeStatus("APPROVED", authentication == null ? null : authentication.getName());
-        final Span saved = spanRepository.save(span);
+        final Target t = new Target(span, document, copy);
+        final Span saved = save(t, span);
 
-        auditLogService.log("SPAN_CREATE", "Span", saved.getId(),
+        audited(t, "SPAN_CREATE", saved.getId(),
                 Map.of("spanId", saved.getId(),
                         "documentId", documentId,
                         "type", normalized,
                         "start", start,
                         "end", end,
-                        "length", text.length()));
-        changeGuard.spansChanged(document, authentication == null ? null : authentication.getName(), "SPAN_CREATE",
-                saved.getId());
+                        "length", text.length()),
+                authentication == null ? null : authentication.getName(), "SPAN_CREATE");
         return saved;
     }
 
@@ -214,18 +289,25 @@ public class ReviewController {
             throw new ResponseStatusException(BAD_REQUEST, "Moving a span's boundaries accepts it.");
         }
         final String status = moving ? "APPROVED" : request.status();
-        final Span span = spanRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
-        final Document document = documentAccessService.loadAccessibleParentForSpan(span, authentication);
-        requireChangeable(document, authentication);
-        final boolean adjudicating = requireMayChange(span, document, authentication,
-                Boolean.TRUE.equals(request.adjudicate()));
+        final Target t = target(id, authentication);
+        final Span span = t.span();
+        final Document document = t.document();
+        final boolean adjudicating;
+        if (t.copy()) {
+            requireBlindChange(request.adjudicate(), status);
+            adjudicating = false;
+        } else {
+            requireChangeable(document, authentication);
+            adjudicating = requireMayChange(span, document, authentication,
+                    Boolean.TRUE.equals(request.adjudicate()));
+        }
         if (Boolean.TRUE.equals(request.adjudicate())
                 && !"APPROVED".equals(status) && !"REJECTED".equals(status)) {
             throw new ResponseStatusException(BAD_REQUEST, "An adjudication accepts or refuses the span.");
         }
         final int[] previousRange = {span.getLocation().characterStart(), span.getLocation().characterEnd()};
-        final String movedText = moving ? requireMovable(span, document, request.start(), request.end()) : null;
+        final String movedText = moving
+                ? requireMovable(span, document, siblings(t), request.start(), request.end()) : null;
 
         final String actor = authentication == null ? null : authentication.getName();
         final Map<String, Object> changes = new LinkedHashMap<>();
@@ -288,15 +370,16 @@ public class ReviewController {
         if (movedText != null) {
             move(span, request.start(), request.end(), movedText, actor);
         }
-        final Span saved = spanRepository.save(span);
+        final Span saved = save(t, span);
         if (movedText != null && (previousRange[0] != request.start() || previousRange[1] != request.end())) {
-            auditLogService.log("SPAN_ADJUST", "Span", saved.getId(), adjustment(saved, previousRange));
+            audited(t, "SPAN_ADJUST", saved.getId(), adjustment(saved, previousRange), actor, null);
         }
         changes.put("spanId", saved.getId());
         changes.put("documentId", saved.getDocumentId() == null ? "" : saved.getDocumentId());
-        auditLogService.log(adjudicating ? "SPAN_ADJUDICATE" : "SPAN_UPDATE", "Span", saved.getId(), changes);
-        changeGuard.spansChanged(document, actor, movedText != null ? "SPAN_ADJUST" : "SPAN_UPDATE", saved.getId());
-        if ("REJECTED".equals(status) && !"REJECTED".equals(previousStatus)) {
+        audited(t, adjudicating ? "SPAN_ADJUDICATE" : "SPAN_UPDATE", saved.getId(), changes, actor,
+                movedText != null ? "SPAN_ADJUST" : "SPAN_UPDATE");
+        // A refusal in a blind review does not count toward proposing a rule, so one value is not counted twice.
+        if (!t.copy() && "REJECTED".equals(status) && !"REJECTED".equals(previousStatus)) {
             detectionRuleService.noteRefusal(saved, document);
         }
         return saved;
@@ -307,7 +390,8 @@ public class ReviewController {
      * a span in a PDF, whose position on the page would no longer match (that follows PDF review, #58), and never
      * onto another span.
      */
-    private String requireMovable(final Span span, final Document document, final int start, final int end) {
+    private String requireMovable(final Span span, final Document document, final List<? extends Span> siblings,
+                                  final int start, final int end) {
         final ai.philterd.workspace.model.Coordinates c = span.getLocation().coordinates();
         if (c != null && (c.w() > 0 || c.h() > 0)) {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
@@ -321,7 +405,7 @@ public class ReviewController {
         if (text.isBlank()) {
             throw new ResponseStatusException(BAD_REQUEST, "The new range is empty.");
         }
-        for (Span other : spanRepository.findByDocumentId(document.getId())) {
+        for (Span other : siblings) {
             if (other.getId() == null || other.getId().equals(span.getId()) || other.getLocation() == null) continue;
             if (start < other.getLocation().characterEnd() && end > other.getLocation().characterStart()) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
@@ -371,9 +455,9 @@ public class ReviewController {
     public ResponseEntity<Map<String, Object>> makeRule(@PathVariable final String id,
                                                         @RequestBody final RuleRequest request,
                                                         final Authentication authentication) {
-        final Span span = spanRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
-        final Document document = documentAccessService.loadAccessibleParentForSpan(span, authentication);
+        final Target t = target(id, authentication);
+        final Span span = t.span();
+        final Document document = t.document();
         try {
             final DetectionRuleService.Made made = detectionRuleService.makeFromSpan(
                     request == null ? null : request.kind(), span, document, authentication);
@@ -387,25 +471,32 @@ public class ReviewController {
     @DeleteMapping(value = "/spans/{id}",
             consumes = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> deleteSpan(@PathVariable final String id, final Authentication authentication) {
-        final Span span = spanRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
-        final Document document = documentAccessService.loadAccessibleParentForSpan(span, authentication);
-        requireChangeable(document, authentication);
+        final Target t = target(id, authentication);
+        final Span span = t.span();
+        final Document document = t.document();
+        if (!t.copy()) {
+            requireChangeable(document, authentication);
+        }
 
         if (!span.isManuallyCreated()) {
             throw new ResponseStatusException(BAD_REQUEST,
                     "Only manually-created spans can be deleted. "
                             + "Use the Refused toggle to ignore a detected span.");
         }
-        requireMayChange(span, document, authentication, false);
+        if (!t.copy()) {
+            requireMayChange(span, document, authentication, false);
+        }
 
-        spanRepository.deleteById(id);
-        auditLogService.log("SPAN_DELETE", "Span", id,
+        if (t.copy()) {
+            copyRepository.deleteById(id);
+        } else {
+            spanRepository.deleteById(id);
+        }
+        audited(t, "SPAN_DELETE", id,
                 Map.of("spanId", id,
                         "documentId", document.getId(),
-                        "type", span.getType() == null ? "" : span.getType()));
-        changeGuard.spansChanged(document, authentication == null ? null : authentication.getName(), "SPAN_DELETE",
-                id);
+                        "type", span.getType() == null ? "" : span.getType()),
+                authentication == null ? null : authentication.getName(), "SPAN_DELETE");
         return Map.of("id", id, "deleted", true);
     }
 
@@ -444,16 +535,18 @@ public class ReviewController {
     @PostMapping(value = "/spans/{id}/redact-like",
             consumes = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> redactAllLike(@PathVariable final String id, final Authentication authentication) {
-        final Span source = spanRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
+        final Target t = target(id, authentication);
+        final Span source = t.span();
 
         // Access check runs *before* any other validation so a non-admin can't
         // distinguish "real but inaccessible span" from "no such span" by reading the
         // status code: an empty-text span used to give 400 while a missing id gave 404.
         // Now both surface as the same uniform "Span not found." 404 — see fix #4 for
         // the cross-controller contract this restores.
-        final Document document = documentAccessService.loadAccessibleParentForSpan(source, authentication);
-        requireChangeable(document, authentication);
+        final Document document = t.document();
+        if (!t.copy()) {
+            requireChangeable(document, authentication);
+        }
 
         final String needle = source.getText();
         if (needle == null || needle.isEmpty()) {
@@ -472,14 +565,16 @@ public class ReviewController {
             throw new ResponseStatusException(BAD_REQUEST,
                     "Redact All Like This is only available for approved or pending spans.");
         }
-        requireMayChange(source, document, authentication, false);
+        if (!t.copy()) {
+            requireMayChange(source, document, authentication, false);
+        }
         final String haystack = document.getOriginalText();
         if (haystack == null || haystack.isEmpty()) {
             return Map.of("created", 0, "approved", 0, "adjudicatedSkipped", 0, "limitReached", false,
                     "limit", REDACT_LIKE_MAX_MATCHES);
         }
 
-        final List<Span> existing = spanRepository.findByDocumentId(source.getDocumentId());
+        final List<? extends Span> existing = siblings(t);
         final Map<Long, Span> byRange = new HashMap<>();
         final List<long[]> existingRanges = new ArrayList<>();
         for (Span s : existing) {
@@ -497,7 +592,7 @@ public class ReviewController {
             source.setAdjudicatedBy(actor);
             source.setAdjudicatedAt(LocalDateTime.now());
         }
-        spanRepository.save(source);
+        save(t, source);
 
         final List<Span> toSave = new ArrayList<>();
         int created = 0;
@@ -543,7 +638,7 @@ public class ReviewController {
                 continue;
             }
 
-            final Span fresh = new Span();
+            final Span fresh = t.copy() ? new BlindReviewSpan() : new Span();
             fresh.setId(UUID.randomUUID().toString());
             fresh.setDocumentId(source.getDocumentId());
             fresh.setType(source.getType());
@@ -560,7 +655,11 @@ public class ReviewController {
         }
 
         if (!toSave.isEmpty()) {
-            spanRepository.saveAll(toSave);
+            if (t.copy()) {
+                copyRepository.saveAll(toSave.stream().map(BlindReviewSpan.class::cast).toList());
+            } else {
+                spanRepository.saveAll(toSave);
+            }
         }
 
         final Map<String, Object> result = new LinkedHashMap<>();
@@ -578,8 +677,7 @@ public class ReviewController {
         auditDetails.put("approved", approved);
         auditDetails.put("adjudicatedSkipped", adjudicatedSkipped);
         auditDetails.put("limitReached", limitReached);
-        auditLogService.log("SPAN_REDACT_LIKE", "Span", source.getId(), auditDetails);
-        changeGuard.spansChanged(document, actor, "SPAN_REDACT_LIKE", source.getId());
+        audited(t, "SPAN_REDACT_LIKE", source.getId(), auditDetails, actor, "SPAN_REDACT_LIKE");
         return result;
     }
 
@@ -590,15 +688,19 @@ public class ReviewController {
     public Span resetSpan(@PathVariable final String id,
                           @RequestBody(required = false) final ResetSpanRequest request,
                           final Authentication authentication) {
-        final Span span = spanRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Span not found."));
-        final Document document = documentAccessService.loadAccessibleParentForSpan(span, authentication);
-        requireChangeable(document, authentication);
-        requireMayChange(span, document, authentication, false);
+        final Target t = target(id, authentication);
+        final Span span = t.span();
+        final Document document = t.document();
+        final String originalStatus = request == null ? null : request.originalStatus();
+        if (t.copy()) {
+            requireBlindChange(false, originalStatus);
+        } else {
+            requireChangeable(document, authentication);
+            requireMayChange(span, document, authentication, false);
+        }
 
         final String actor = authentication == null ? null : authentication.getName();
         final String previousStatus = span.getStatus() == null ? "" : span.getStatus();
-        final String originalStatus = request == null ? null : request.originalStatus();
 
         if (originalStatus == null || !ALLOWED_STATUSES.contains(originalStatus)) {
             throw new ResponseStatusException(BAD_REQUEST, "Invalid status: " + originalStatus);
@@ -608,7 +710,8 @@ public class ReviewController {
         final int[] previousRange = {span.getLocation().characterStart(), span.getLocation().characterEnd()};
         final boolean restoring = span.isAdjusted() && span.getOriginalCharacterStart() != null;
         final String restoredText = restoring
-                ? requireMovable(span, document, span.getOriginalCharacterStart(), span.getOriginalCharacterEnd())
+                ? requireMovable(span, document, siblings(t), span.getOriginalCharacterStart(),
+                        span.getOriginalCharacterEnd())
                 : null;
         span.changeStatus(originalStatus, actor);
         if (restoring) {
@@ -618,7 +721,7 @@ public class ReviewController {
         final String withdrawn = span.getAdjudicatedBy();
         span.setAdjudicatedBy(null);
         span.setAdjudicatedAt(null);
-        final Span saved = spanRepository.save(span);
+        final Span saved = save(t, span);
 
         final Map<String, Object> details = new LinkedHashMap<>();
         if (withdrawn != null) {
@@ -628,11 +731,13 @@ public class ReviewController {
         details.put("documentId", saved.getDocumentId() == null ? "" : saved.getDocumentId());
         details.put("previousStatus", previousStatus);
         details.put("originalStatus", originalStatus == null ? "" : originalStatus);
-        auditLogService.log("SPAN_RESET", "Span", saved.getId(), details);
+        audited(t, "SPAN_RESET", saved.getId(), details, actor, null);
         if (restoring) {
-            auditLogService.log("SPAN_ADJUST", "Span", saved.getId(), adjustment(saved, previousRange));
+            audited(t, "SPAN_ADJUST", saved.getId(), adjustment(saved, previousRange), actor, null);
         }
-        changeGuard.spansChanged(document, actor, "SPAN_RESET", saved.getId());
+        if (!t.copy()) {
+            changeGuard.spansChanged(document, actor, "SPAN_RESET", saved.getId());
+        }
         return saved;
     }
 

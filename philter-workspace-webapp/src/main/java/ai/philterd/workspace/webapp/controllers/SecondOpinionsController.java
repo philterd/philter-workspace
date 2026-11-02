@@ -68,6 +68,7 @@ public class SecondOpinionsController {
     private final AuditLogQueryService auditLogQueryService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final ai.philterd.workspace.service.BlindDoubleReviewService blindReview;
 
     public SecondOpinionsController(final SpanRepository spanRepository,
                                     final DocumentRepository documentRepository,
@@ -77,7 +78,8 @@ public class SecondOpinionsController {
                                     final AuditLogRepository auditLogRepository,
                                     final AuditLogQueryService auditLogQueryService,
                                     final AuditLogService auditLogService,
-                                    final ObjectMapper objectMapper) {
+                                    final ObjectMapper objectMapper,
+                                    final ai.philterd.workspace.service.BlindDoubleReviewService blindReview) {
         this.spanRepository = spanRepository;
         this.documentRepository = documentRepository;
         this.batchRepository = batchRepository;
@@ -87,6 +89,16 @@ public class SecondOpinionsController {
         this.auditLogQueryService = auditLogQueryService;
         this.auditLogService = auditLogService;
         this.objectMapper = objectMapper;
+        this.blindReview = blindReview;
+    }
+
+    /** The history shows the first review's decisions (#86). */
+    private void showSpans(final Authentication authentication, final Document document) {
+        try {
+            blindReview.showSpans(authentication, document);
+        } catch (ai.philterd.workspace.service.BlindDoubleReviewService.Refused e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        }
     }
 
     @GetMapping("/second-opinions")
@@ -170,6 +182,9 @@ public class SecondOpinionsController {
         }
         final Document document = documentRepository.findById(id).orElse(null);
         if (document == null) return List.of();
+        // The history shows the first review's decisions: an administrator shown it cannot then do the document's
+        // blind second review (#86), and the one doing it is not shown it.
+        showSpans(authentication, document);
         final Batch batch = document.getBatchId() == null ? null
                 : batchRepository.findById(document.getBatchId()).orElse(null);
         final String complianceProfileName = (batch != null && batch.getComplianceProfileId() != null)
@@ -233,6 +248,12 @@ public class SecondOpinionsController {
         final Document document = documentRepository.findById(id).orElse(null);
         if (document == null) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
+        try {
+            blindReview.showSpans(authentication, document);
+        } catch (ai.philterd.workspace.service.BlindDoubleReviewService.Refused e) {
+            response.sendError(HttpServletResponse.SC_CONFLICT);
             return;
         }
 

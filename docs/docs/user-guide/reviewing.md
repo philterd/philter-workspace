@@ -178,9 +178,14 @@ counter is hidden.
 In batches with
 [Blind Double Review](../admin/batches.md#blind-double-review) enabled,
 **Previous** and **Next** also skip any document flagged for double review
-whose first review was performed by you. This keeps the second review
-blind — you are never paged into a document you have already reviewed,
-even if it is otherwise eligible for the queue.
+whose first review was performed by you, so you are never paged into a
+document you have already reviewed.
+
+Opening a document that awaits its blind second review shows its text without
+any spans. Click **Start blind review** to review your own copy of Philter's
+detections, every one unreviewed, then **Submit blind review** once each is
+accepted or refused. Your copy never changes the document's spans or its
+decision. See [Reviewer experience](../admin/batches.md#reviewer-experience).
 
 It also has Approve / Reject / Unapprove buttons. These set the *document's*
 status:

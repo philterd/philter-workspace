@@ -57,7 +57,8 @@ class SourceRetentionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceRetentionService(documents, spans, pendingUploads, batches, policies, search, audit,
+        service = new SourceRetentionService(documents, spans,
+                mock(ai.philterd.workspace.repository.BlindReviewSpanRepository.class), pendingUploads, batches, policies, search, audit,
                 Clock.fixed(NOW, ZoneOffset.UTC));
         when(spans.deleteByDocumentId(anyString())).thenReturn(3L);
         when(search.removeDocument(anyString())).thenReturn(true);

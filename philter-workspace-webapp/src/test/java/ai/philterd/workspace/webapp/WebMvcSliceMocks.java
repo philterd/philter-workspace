@@ -115,6 +115,15 @@ abstract class WebMvcSliceMocks {
     @MockitoBean protected ai.philterd.workspace.service.DocumentDeliveryService documentDeliveryService;
     @MockitoBean protected ai.philterd.workspace.service.DocumentChangeGuard documentChangeGuard;
     @MockitoBean protected ai.philterd.workspace.service.DocumentFinalizationService documentFinalizationService;
+    @MockitoBean protected ai.philterd.workspace.repository.BlindReviewSpanRepository blindReviewSpanRepository;
+    @MockitoBean protected ai.philterd.workspace.service.BlindDoubleReviewService blindDoubleReviewService;
+
+    /** Recording who was shown a document's spans hands the document back, as the service does (#86). */
+    @org.junit.jupiter.api.BeforeEach
+    void blindDoubleReviewHandsTheDocumentBack() {
+        org.mockito.Mockito.when(blindDoubleReviewService.noteSeen(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(1));
+    }
     @MockitoBean protected ai.philterd.workspace.webapp.security.PhilterWebhookSettings philterWebhookSettings;
     @MockitoBean protected ai.philterd.workspace.webapp.security.PhilterWebhookReceiver philterWebhookReceiver;
     @MockitoBean protected RedactionCertificateRepository redactionCertificateRepository;

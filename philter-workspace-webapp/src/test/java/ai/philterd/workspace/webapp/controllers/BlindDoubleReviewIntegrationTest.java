@@ -9,7 +9,11 @@
  */
 package ai.philterd.workspace.webapp.controllers;
 
+import ai.philterd.workspace.api.controller.ReviewController;
 import ai.philterd.workspace.api.controller.TriageController;
+import ai.philterd.workspace.dto.SpanUpdateRequest;
+import ai.philterd.workspace.model.BlindReviewSpan;
+import ai.philterd.workspace.model.DetectedSpan;
 import ai.philterd.workspace.model.Batch;
 import ai.philterd.workspace.model.Coordinates;
 import ai.philterd.workspace.model.Document;
@@ -18,6 +22,7 @@ import ai.philterd.workspace.model.RedactionCertificate;
 import ai.philterd.workspace.model.Span;
 import ai.philterd.workspace.model.UserSettings;
 import ai.philterd.workspace.repository.BatchRepository;
+import ai.philterd.workspace.repository.BlindReviewSpanRepository;
 import ai.philterd.workspace.repository.ComplianceProfileRepository;
 import ai.philterd.workspace.repository.DocumentRepository;
 import ai.philterd.workspace.repository.FinalizationPolicyRepository;
@@ -27,6 +32,9 @@ import ai.philterd.workspace.repository.UserRepository;
 import ai.philterd.workspace.service.ApprovalRuleEvaluator;
 import ai.philterd.workspace.service.AuditLogService;
 import ai.philterd.workspace.service.BatchAccessService;
+import ai.philterd.workspace.service.BlindDoubleReviewService;
+import ai.philterd.workspace.service.DetectionRuleService;
+import ai.philterd.workspace.service.DocumentChangeGuard;
 import ai.philterd.workspace.service.DocumentAccessService;
 import ai.philterd.workspace.service.DocumentLockService;
 import ai.philterd.workspace.service.LlmJudgeDefaultsService;
@@ -44,6 +52,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.servlet.mvc.support.RedirectAttributesModelMap;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -57,6 +66,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -103,7 +113,14 @@ class BlindDoubleReviewIntegrationTest {
      */
     private ai.philterd.workspace.service.GeneralSettingsService generalSettingsService;
 
+    private final Map<String, BlindReviewSpan> copies = new HashMap<>();
+    private BlindReviewSpanRepository copyRepository;
+    private AuditLogService auditLogService;
+    private DocumentAccessService documentAccessService;
+    private BlindDoubleReviewService blindService;
+
     private ReviewViewController reviewController;
+    private ReviewController reviewApi;
     private TriageController triageController;
 
     @BeforeEach
@@ -111,6 +128,8 @@ class BlindDoubleReviewIntegrationTest {
         documentRepository = mock(DocumentRepository.class);
         spanRepository = mock(SpanRepository.class);
         batchRepository = mock(BatchRepository.class);
+        copyRepository = mock(BlindReviewSpanRepository.class);
+        auditLogService = mock(AuditLogService.class);
 
         wireRepositoryStubsToInMemoryState();
 
@@ -131,60 +150,19 @@ class BlindDoubleReviewIntegrationTest {
         approvalRuleEvaluator = mock(ApprovalRuleEvaluator.class);
         when(approvalRuleEvaluator.dualApprovalRequired(any(), any(), any(), any())).thenReturn(false);
 
+        final UserGroupsService userGroupsService = mock(UserGroupsService.class);
+        documentAccessService = new DocumentAccessService(batchRepository, documentRepository,
+                new BatchAccessService(batchRepository, userGroupsService));
+        blindService = new BlindDoubleReviewService(documentRepository, spanRepository, copyRepository,
+                documentAccessService, auditLogService);
         reviewController = buildReviewController();
+        reviewApi = new ReviewController(spanRepository, documentRepository, documentAccessService, auditLogService,
+                mock(DetectionRuleService.class), new DocumentChangeGuard(documentRepository, auditLogService),
+                copyRepository, blindService);
         triageController = buildTriageController();
     }
 
     // ---------- the multi-user happy path ----------
-
-    @Test
-    void aliceReviewsThenBobSeesItForSecondReview() {
-        // Alice and Bob share access. The batch has Blind Double Review enabled at 100% so
-        // every document is sampled into the second-review cohort.
-        final Document doc = doubleReviewDoc("d1", "alpha bravo charlie", List.of(
-                approvedSpan("s1", "d1", 0, 5),     // alpha
-                approvedSpan("s2", "d1", 6, 11)));  // bravo
-
-        // 1) Alice approves. The document transitions to APPROVED, firstReviewer = alice,
-        //    and her two-span snapshot is captured.
-        reviewController.approve(doc.getId(), alice(), flash());
-        assertEquals("APPROVED", doc.getStatus(),
-                "First approval should transition status to APPROVED when only one reviewer is required.");
-        assertEquals("alice@x.com", doc.getFirstReviewer(),
-                "First reviewer should be the user who first approved or rejected the document.");
-        assertNotNull(doc.getFirstReviewSpans(),
-                "The first reviewer's span snapshot must be captured for IAA computation.");
-        assertEquals(2, doc.getFirstReviewSpans().size());
-        assertNull(doc.getSecondReviewer(), "Second reviewer should not be set until a different user reviews.");
-        assertNull(doc.getSecondReviewSpans(), "Second reviewer's snapshot is captured only on second review.");
-
-        // 2) Alice's queue: the now-APPROVED double-review document should have dropped out —
-        //    she did the first review and is disqualified from the second.
-        final List<Map<String, Object>> aliceQueue = queueRowsFor(alice());
-        assertTrue(aliceQueue.stream().noneMatch(r -> doc.getId().equals(r.get("id"))),
-                "First reviewer must not see their own approved double-review documents in the queue.");
-
-        // 3) Bob's queue: the same APPROVED document IS visible because doubleReview = true
-        //    and the first reviewer is not Bob.
-        final List<Map<String, Object>> bobQueue = queueRowsFor(bob());
-        assertTrue(bobQueue.stream().anyMatch(r -> doc.getId().equals(r.get("id"))),
-                "An approved double-review document must appear in another reviewer's queue for the second pass.");
-
-        // 4) Bob completes the second review. firstReviewer is unchanged; secondReviewer is
-        //    Bob; secondReviewSpans is set to whatever spans were APPROVED at that moment.
-        reviewController.approve(doc.getId(), bob(), flash());
-        assertEquals("alice@x.com", doc.getFirstReviewer(),
-                "First reviewer stays alice across subsequent reviews.");
-        assertEquals("bob@x.com", doc.getSecondReviewer());
-        assertNotNull(doc.getSecondReviewSpans());
-        assertEquals(2, doc.getSecondReviewSpans().size());
-
-        // 5) After both reviews, the queue for both users no longer surfaces the document.
-        final List<Map<String, Object>> aliceQueueAfter = queueRowsFor(alice());
-        final List<Map<String, Object>> bobQueueAfter = queueRowsFor(bob());
-        assertTrue(aliceQueueAfter.stream().noneMatch(r -> doc.getId().equals(r.get("id"))));
-        assertTrue(bobQueueAfter.stream().noneMatch(r -> doc.getId().equals(r.get("id"))));
-    }
 
     @Test
     void rejectionAlsoStampsFirstReviewerAndSnapshot() {
@@ -199,11 +177,6 @@ class BlindDoubleReviewIntegrationTest {
         assertNotNull(doc.getFirstReviewSpans(),
                 "Rejection must also capture the first reviewer's span snapshot.");
         assertEquals(1, doc.getFirstReviewSpans().size());
-
-        // Bob then performs the second pass via reject (he disagrees).
-        reviewController.reject(doc.getId(), bob(), flash());
-        assertEquals("bob@x.com", doc.getSecondReviewer());
-        assertNotNull(doc.getSecondReviewSpans());
     }
 
     @Test
@@ -269,6 +242,226 @@ class BlindDoubleReviewIntegrationTest {
         reviewController.review("d-first", bob(), bobModel);
         assertEquals("d-mid", bobModel.getAttribute("nextDocumentId"),
                 "A reviewer who did NOT do the first review must still see the document in their navigation.");
+    }
+
+    // ---------- independent blind second review (#86) ----------
+
+    @Test
+    void secondReviewerOpensADocumentTheFirstApprovedAndSeesOnlyUnreviewedDetections() {
+        final Document doc = approvedByAlice("d1");
+
+        // Bob has not been shown the spans: the page shows the text without them and offers the blind review.
+        final org.springframework.ui.ConcurrentModel landing = page("d1", bob());
+        assertEquals("LANDING", landing.getAttribute("blindView"));
+        assertEquals(true, landing.getAttribute("blindMayStart"));
+        assertTrue(shownSpans(landing).isEmpty(), "No span, and so no decision, is shown before the review starts.");
+        assertTrue(queueRowsFor(bob()).stream().anyMatch(r -> "d1".equals(r.get("id"))));
+
+        reviewController.startBlindReview("d1", bob(), flash());
+        assertEquals("bob@x.com", doc.getSecondReviewer());
+
+        // Every detection, including one Alice left out, as unreviewed, with no one named as deciding it.
+        final org.springframework.ui.ConcurrentModel blind = page("d1", bob());
+        assertEquals("BLIND", blind.getAttribute("blindView"));
+        final List<Map<String, Object>> shown = shownSpans(blind);
+        assertEquals(3, shown.size());
+        for (Map<String, Object> entry : shown) {
+            assertEquals("PENDING", entry.get("status"));
+            assertNull(entry.get("statusChangedBy"));
+            assertNull(entry.get("adjudicatedBy"));
+            assertFalse(String.valueOf(entry.get("id")).startsWith("d1-s"), "never the document's own spans");
+        }
+        assertEquals(3, reviewApi.getSpans("d1", bob()).size());
+        assertTrue(reviewApi.getSpans("d1", bob()).stream().allMatch(sp -> sp instanceof BlindReviewSpan));
+
+        // The first review is untouched.
+        assertEquals("APPROVED", doc.getStatus());
+        assertEquals(List.of("alice@x.com"), doc.getApprovedBy());
+        assertTrue(spansByDocument.get("d1").stream().allMatch(sp -> "alice@x.com".equals(sp.getStatusChangedBy())));
+    }
+
+    @Test
+    void theBlindReviewersDecisionsStayOnTheirOwnCopy() {
+        final Document doc = approvedByAlice("d2");
+        reviewController.startBlindReview("d2", bob(), flash());
+        final List<Span> mine = reviewApi.getSpans("d2", bob());
+
+        reviewApi.updateSpan(mine.get(0).getId(), new SpanUpdateRequest("REJECTED", null), bob());
+        reviewApi.createSpan("d2", new ReviewController.CreateSpanRequest("person", 12, 19), bob());
+
+        assertEquals("REJECTED", copies.get(mine.get(0).getId()).getStatus());
+        assertEquals(List.of("alice@x.com"), doc.getApprovedBy(), "a change to the copy clears no approval");
+        assertEquals(2, spansByDocument.get("d2").size(), "the document's spans are neither changed nor added to");
+        assertTrue(spansByDocument.get("d2").stream().allMatch(sp -> "APPROVED".equals(sp.getStatus())));
+
+        // Bob cannot change the document's spans or its decision, and no one else can reach his copy.
+        assertThrows(ResponseStatusException.class, () -> reviewApi.updateSpan("d2-s1",
+                new SpanUpdateRequest("REJECTED", null), bob()));
+        final RedirectAttributes refused = flash();
+        reviewController.unapprove("d2", bob(), refused);
+        assertNotNull(refused.getFlashAttributes().get("error"));
+        assertEquals("APPROVED", doc.getStatus());
+        final ResponseStatusException hidden = assertThrows(ResponseStatusException.class,
+                () -> reviewApi.updateSpan(mine.get(1).getId(), new SpanUpdateRequest("APPROVED", null), alice()));
+        assertEquals(404, hidden.getStatusCode().value());
+        assertThrows(ResponseStatusException.class, () -> reviewApi.updateSpan(mine.get(1).getId(),
+                new SpanUpdateRequest(Span.STATUS_NEEDS_SECOND_OPINION, null), bob()));
+    }
+
+    @Test
+    void theBlindReviewerIsNotHeldUpByTheDocumentsLockNorToldWhoHoldsIt() {
+        final Document doc = approvedByAlice("d9");
+        reviewController.startBlindReview("d9", bob(), flash());
+        // Alice reopens her review and holds the lock while Bob works.
+        doc.setStatus("REVIEW_REQUIRED");
+        doc.setLockedBy("alice@x.com");
+        doc.setLockExpiresAt(java.time.Instant.now().plusSeconds(600));
+
+        final org.springframework.ui.ConcurrentModel blind = page("d9", bob());
+
+        assertEquals("BLIND", blind.getAttribute("blindView"));
+        assertEquals(false, blind.getAttribute("lockedByOther"));
+        assertEquals("", blind.getAttribute("lockHolder"));
+        reviewApi.updateSpan(reviewApi.getSpans("d9", bob()).get(0).getId(),
+                new SpanUpdateRequest("APPROVED", null), bob());
+    }
+
+    @Test
+    void theBlindReviewIsRecordedOnceEverySpanIsDecided() {
+        final Document doc = approvedByAlice("d3");
+        reviewController.startBlindReview("d3", bob(), flash());
+
+        final RedirectAttributes early = flash();
+        reviewController.submitBlindReview("d3", bob(), early);
+        assertNotNull(early.getFlashAttributes().get("error"));
+        assertNull(doc.getSecondReviewSpans());
+
+        decideEveryCopy("d3", bob(), "APPROVED");
+        reviewController.submitBlindReview("d3", bob(), flash());
+
+        assertEquals(3, doc.getSecondReviewSpans().size(), "Bob's three approvals");
+        assertEquals(2, doc.getFirstReviewSpans().size(), "Alice's two, compared independently by the report");
+        assertNotNull(doc.getSecondReviewSubmittedAt());
+        // Recorded: Bob is shown the document as it is, and his copy can no longer be changed.
+        assertEquals("RECORD", page("d3", bob()).getAttribute("blindView"));
+        final String copyId = copies.values().iterator().next().getId();
+        assertThrows(ResponseStatusException.class,
+                () -> reviewApi.updateSpan(copyId, new SpanUpdateRequest("REJECTED", null), bob()));
+    }
+
+    @Test
+    void finalizationWaitsUntilAnApproverWhoDidNeitherReviewReconcilesThem() {
+        final Document doc = approvedByAlice("d4");
+        final RedirectAttributes tooSoon = flash();
+        reviewController.finalizeDocument("d4", alice(), tooSoon);
+        assertNotNull(tooSoon.getFlashAttributes().get("error"));
+        assertEquals("APPROVED", doc.getStatus());
+
+        reviewController.startBlindReview("d4", bob(), flash());
+        decideEveryCopy("d4", bob(), "APPROVED");
+        reviewController.submitBlindReview("d4", bob(), flash());
+
+        final RedirectAttributes unreconciled = flash();
+        reviewController.finalizeDocument("d4", alice(), unreconciled);
+        assertNotNull(unreconciled.getFlashAttributes().get("error"));
+
+        // Carol sees where the reviews differ: Bob redacted "charlie", which Alice did not.
+        final org.springframework.ui.ConcurrentModel carolsPage = page("d4", carol());
+        assertEquals(true, carolsPage.getAttribute("blindShowComparison"));
+        @SuppressWarnings("unchecked")
+        final List<BlindDoubleReviewService.Disagreement> differences =
+                (List<BlindDoubleReviewService.Disagreement>) carolsPage.getAttribute("blindDisagreements");
+        assertEquals(1, differences.size());
+        assertEquals("charlie", differences.get(0).text());
+        assertNull(differences.get(0).firstType());
+        assertEquals("person", differences.get(0).secondType());
+        assertTrue(queueRowsFor(carol()).stream().anyMatch(r -> "d4".equals(r.get("id"))));
+        assertTrue(queueRowsFor(alice()).stream().noneMatch(r -> "d4".equals(r.get("id"))));
+
+        for (Authentication reviewer : List.of(alice(), bob())) {
+            final RedirectAttributes own = flash();
+            reviewController.reconcileBlindReview("d4", reviewer, own);
+            assertNotNull(own.getFlashAttributes().get("error"), "neither reviewer reconciles their own reviews");
+        }
+        reviewController.reconcileBlindReview("d4", carol(), flash());
+        assertEquals("carol@x.com", doc.getDoubleReviewReconciledBy());
+
+        reviewController.finalizeDocument("d4", carol(), flash());
+        assertEquals("FINALIZED", doc.getStatus());
+    }
+
+    @Test
+    void someoneShownTheDocumentsSpansCannotDoItsBlindReview() {
+        final Document doc = doubleReviewDoc("d5", "alpha bravo", List.of(approvedSpan("d5-s1", "d5", 0, 5)));
+        doc.setDoubleReviewDetections(List.of(detected(0, 5)));
+        // Carol opens it while the first review is in progress.
+        assertEquals("RECORD", page("d5", carol()).getAttribute("blindView"));
+        assertTrue(doc.getFirstReviewSeenBy().contains("carol@x.com"));
+
+        reviewController.approve("d5", alice(), flash());
+
+        assertEquals("RECORD", page("d5", carol()).getAttribute("blindView"));
+        assertEquals(false, page("d5", carol()).getAttribute("blindMayStart"));
+        final RedirectAttributes refused = flash();
+        reviewController.startBlindReview("d5", carol(), refused);
+        assertNotNull(refused.getFlashAttributes().get("error"));
+        assertNull(doc.getSecondReviewer());
+        assertTrue(queueRowsFor(carol()).stream().noneMatch(r -> "d5".equals(r.get("id"))));
+        assertTrue(queueRowsFor(bob()).stream().anyMatch(r -> "d5".equals(r.get("id"))));
+    }
+
+    @Test
+    void showingTheFirstReviewGivesUpTheBlindReview() {
+        final Document doc = approvedByAlice("d6");
+        assertEquals("LANDING", page("d6", dave()).getAttribute("blindView"));
+
+        reviewController.revealFirstReview("d6", dave(), flash());
+
+        final org.springframework.ui.ConcurrentModel shown = page("d6", dave());
+        assertEquals("RECORD", shown.getAttribute("blindView"));
+        assertEquals(2, shownSpans(shown).size());
+        assertFalse(BlindDoubleReviewService.mayStart(dave(), doc));
+    }
+
+    @Test
+    void anApproverReleasesABlindReviewSoSomeoneElseCanDoIt() {
+        final Document doc = approvedByAlice("d7");
+        reviewController.startBlindReview("d7", bob(), flash());
+        reviewApi.updateSpan(reviewApi.getSpans("d7", bob()).get(0).getId(),
+                new SpanUpdateRequest("APPROVED", null), bob());
+        assertTrue(queueRowsFor(carol()).stream().noneMatch(r -> "d7".equals(r.get("id"))), "Bob is doing it");
+        assertTrue(queueRowsFor(bob()).stream().anyMatch(r -> "d7".equals(r.get("id"))));
+        assertEquals("LANDING", page("d7", carol()).getAttribute("blindView"));
+
+        reviewController.releaseBlindReview("d7", carol(), flash());
+
+        assertNull(doc.getSecondReviewer());
+        assertTrue(copies.isEmpty(), "Bob's copy is discarded");
+        reviewController.startBlindReview("d7", carol(), flash());
+        assertEquals("carol@x.com", doc.getSecondReviewer());
+        assertTrue(reviewApi.getSpans("d7", carol()).stream().allMatch(sp -> "PENDING".equals(sp.getStatus())),
+                "Carol starts from the detections, not from Bob's decisions");
+    }
+
+    @Test
+    void aDocumentSelectedBeforeDetectionsWereKeptStartsFromItsDetectedSpans() {
+        final Span moved = approvedSpan("d8-s1", "d8", 0, 11);
+        moved.setOriginalCharacterStart(0);
+        moved.setOriginalCharacterEnd(5);
+        moved.setAdjusted(true);
+        final Span added = approvedSpan("d8-s2", "d8", 12, 19);
+        added.setManuallyCreated(true);
+        final Document doc = doubleReviewDoc("d8", "alpha bravo charlie", List.of(moved, added));
+        reviewController.approve("d8", alice(), flash());
+
+        reviewController.startBlindReview("d8", bob(), flash());
+
+        final List<Span> mine = reviewApi.getSpans("d8", bob());
+        assertEquals(1, mine.size(), "a span added by hand is not a detection");
+        assertEquals(0, mine.get(0).getLocation().characterStart());
+        assertEquals(5, mine.get(0).getLocation().characterEnd(), "at the boundaries it was detected at");
+        assertEquals("PENDING", mine.get(0).getStatus());
+        assertNull(doc.getDoubleReviewDetections());
     }
 
     // ---------- review page: full-text search gate on the Find similar button ----------
@@ -447,47 +640,6 @@ class BlindDoubleReviewIntegrationTest {
     // ---------- workflow invariants: no overwriting once stamped ----------
 
     @Test
-    void firstReviewerIsNotOverwrittenBySecondReview() {
-        final Document doc = doubleReviewDoc("d-stamp", "alpha bravo", List.of(
-                approvedSpan("s6", "d-stamp", 0, 5)));
-
-        reviewController.approve(doc.getId(), alice(), flash());
-        assertEquals("alice@x.com", doc.getFirstReviewer());
-        final java.util.List<int[]> aliceSnapshot = doc.getFirstReviewSpans();
-
-        reviewController.approve(doc.getId(), bob(), flash());
-        assertEquals("alice@x.com", doc.getFirstReviewer(),
-                "firstReviewer is write-once across subsequent reviews.");
-        assertSame(aliceSnapshot, doc.getFirstReviewSpans(),
-                "firstReviewSpans is captured once at the first review and never replaced.");
-    }
-
-    @Test
-    void thirdReviewerDoesNotOverwriteSecondReviewer() {
-        // Three distinct reviewers approve the same document in order. The second snapshot
-        // belongs to whoever was the FIRST distinct second reviewer — a third (or later)
-        // reviewer must not reset it.
-        final Document doc = doubleReviewDoc("d-three", "alpha bravo", List.of(
-                approvedSpan("s7", "d-three", 0, 5)));
-
-        reviewController.approve(doc.getId(), alice(), flash());
-        reviewController.approve(doc.getId(), bob(), flash());
-
-        final java.util.List<int[]> bobSnapshot = doc.getSecondReviewSpans();
-        assertEquals("bob@x.com", doc.getSecondReviewer());
-        assertNotNull(bobSnapshot);
-
-        // A third reviewer signs in and approves. Carol's email is recorded in approvedBy
-        // (the existing dual-approval mechanism) but the blind-double-review attribution
-        // must not move from Bob to Carol.
-        reviewController.approve(doc.getId(), carol(), flash());
-        assertEquals("bob@x.com", doc.getSecondReviewer(),
-                "secondReviewer must not be overwritten by a third reviewer.");
-        assertSame(bobSnapshot, doc.getSecondReviewSpans(),
-                "secondReviewSpans must remain Bob's snapshot, not Carol's.");
-    }
-
-    @Test
     void sameReviewerCannotApproveADocumentTwice() {
         // Existing dual-approval guard: a reviewer who already approved cannot approve again.
         // Verifies the guard is in force for blind-double-review documents — Alice can't
@@ -505,25 +657,6 @@ class BlindDoubleReviewIntegrationTest {
         assertNull(doc.getSecondReviewer(),
                 "Same-user repeat approval must not promote them to secondReviewer.");
         assertNull(doc.getSecondReviewSpans());
-    }
-
-    @Test
-    void rejectingTwiceByDifferentReviewersStampsTheSecondReviewer() {
-        // Two-step rejection scenario. Alice rejects → secondReviewer null. Bob then
-        // rejects → secondReviewer = bob, secondReviewSpans captured. The doc never leaves
-        // REJECTED status across both events.
-        final Document doc = doubleReviewDoc("d-double-reject", "alpha bravo", List.of(
-                approvedSpan("s9", "d-double-reject", 0, 5)));
-
-        reviewController.reject(doc.getId(), alice(), flash());
-        assertEquals("REJECTED", doc.getStatus());
-        assertEquals("alice@x.com", doc.getFirstReviewer());
-        assertNull(doc.getSecondReviewer());
-
-        reviewController.reject(doc.getId(), bob(), flash());
-        assertEquals("REJECTED", doc.getStatus());
-        assertEquals("bob@x.com", doc.getSecondReviewer());
-        assertNotNull(doc.getSecondReviewSpans());
     }
 
     @Test
@@ -570,9 +703,46 @@ class BlindDoubleReviewIntegrationTest {
         final Span s = new Span();
         s.setId(id);
         s.setDocumentId(documentId);
-        s.setStatus("APPROVED");
+        s.setType("person");
+        s.changeStatus("APPROVED", "alice@x.com");
         s.setLocation(new Location(start, end, 1, new Coordinates(0, 0, 0, 0)));
         return s;
+    }
+
+    private static DetectedSpan detected(final int start, final int end) {
+        return new DetectedSpan("person", 0.9, new Location(start, end, 1, new Coordinates(0, 0, 0, 0)));
+    }
+
+    private org.springframework.ui.ConcurrentModel page(final String id, final Authentication who) {
+        final org.springframework.ui.ConcurrentModel model = new org.springframework.ui.ConcurrentModel();
+        reviewController.review(id, who, model);
+        return model;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> shownSpans(final org.springframework.ui.ConcurrentModel model) {
+        return (List<Map<String, Object>>) model.getAttribute("originalRedactions");
+    }
+
+    /** "alpha bravo charlie": Alice approves alpha and bravo; Philter also detected charlie. */
+    private Document approvedByAlice(final String id) {
+        final Document doc = doubleReviewDoc(id, "alpha bravo charlie", List.of(
+                approvedSpan(id + "-s1", id, 0, 5), approvedSpan(id + "-s2", id, 6, 11)));
+        doc.setDoubleReviewDetections(List.of(detected(0, 5), detected(6, 11), detected(12, 19)));
+        reviewController.approve(id, alice(), flash());
+        assertEquals("APPROVED", doc.getStatus());
+        return doc;
+    }
+
+    private void decideEveryCopy(final String id, final Authentication who, final String status) {
+        for (Span c : reviewApi.getSpans(id, who)) {
+            reviewApi.updateSpan(c.getId(), new SpanUpdateRequest(status, null), who);
+        }
+    }
+
+    private static Authentication dave() {
+        return new UsernamePasswordAuthenticationToken("dave@x.com", null,
+                Set.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
     }
 
     /**
@@ -638,14 +808,44 @@ class BlindDoubleReviewIntegrationTest {
                 });
 
         when(spanRepository.findByDocumentId(anyString()))
-                .thenAnswer(inv -> spansByDocument.getOrDefault(inv.getArgument(0, String.class), List.of()));
+                .thenAnswer(inv -> new ArrayList<>(
+                        spansByDocument.getOrDefault(inv.getArgument(0, String.class), List.of())));
+        when(spanRepository.findById(anyString())).thenAnswer(inv -> spansByDocument.values().stream()
+                .flatMap(List::stream).filter(sp -> inv.getArgument(0, String.class).equals(sp.getId())).findFirst());
+        when(spanRepository.save(any(Span.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // The blind review copies, kept in their own collection.
+        when(copyRepository.findByDocumentId(anyString())).thenAnswer(inv -> copies.values().stream()
+                .filter(c -> inv.getArgument(0, String.class).equals(c.getDocumentId()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new)));
+        when(copyRepository.findById(anyString()))
+                .thenAnswer(inv -> Optional.ofNullable(copies.get(inv.getArgument(0, String.class))));
+        when(copyRepository.save(any(BlindReviewSpan.class))).thenAnswer(inv -> {
+            final BlindReviewSpan c = inv.getArgument(0);
+            copies.put(c.getId(), c);
+            return c;
+        });
+        when(copyRepository.saveAll(any())).thenAnswer(inv -> {
+            final List<BlindReviewSpan> saved = new ArrayList<>();
+            for (Object o : inv.getArgument(0, Iterable.class)) {
+                copies.put(((BlindReviewSpan) o).getId(), (BlindReviewSpan) o);
+                saved.add((BlindReviewSpan) o);
+            }
+            return saved;
+        });
+        org.mockito.Mockito.doAnswer(inv -> copies.remove(inv.getArgument(0, String.class)))
+                .when(copyRepository).deleteById(anyString());
+        when(copyRepository.deleteByDocumentId(anyString())).thenAnswer(inv -> {
+            final String id = inv.getArgument(0, String.class);
+            final List<String> gone = copies.values().stream().filter(c -> id.equals(c.getDocumentId()))
+                    .map(BlindReviewSpan::getId).toList();
+            gone.forEach(copies::remove);
+            return (long) gone.size();
+        });
     }
 
     private ReviewViewController buildReviewController() {
         final UserGroupsService userGroupsService = mock(UserGroupsService.class);
-        final BatchAccessService batchAccessService = new BatchAccessService(batchRepository, userGroupsService);
-        final DocumentAccessService documentAccessService = new DocumentAccessService(
-                batchRepository, documentRepository, batchAccessService);
 
         final ComplianceProfileRepository complianceProfileRepository = mock(ComplianceProfileRepository.class);
         final OllamaInstanceRepository ollamaInstanceRepository = mock(OllamaInstanceRepository.class);
@@ -670,7 +870,6 @@ class BlindDoubleReviewIntegrationTest {
         cert.setDocumentHash("hash");
         when(redactionCertificateService.generate(any(), any())).thenReturn(cert);
         final FinalizationPolicyRepository finalizationPolicyRepository = mock(FinalizationPolicyRepository.class);
-        final AuditLogService auditLogService = mock(AuditLogService.class);
 
         generalSettingsService = mock(ai.philterd.workspace.service.GeneralSettingsService.class);
         when(generalSettingsService.load()).thenReturn(new ai.philterd.workspace.model.GeneralSettings());
@@ -685,9 +884,11 @@ class BlindDoubleReviewIntegrationTest {
                         batchRepository, finalizationPolicyRepository, redactionCertificateService, documentLockService,
                         new ai.philterd.workspace.service.DocumentChangeGuard(documentRepository, auditLogService),
                         new ai.philterd.workspace.service.SourceRetentionService(documentRepository, spanRepository,
+                                copyRepository,
                                 org.mockito.Mockito.mock(ai.philterd.workspace.repository.PendingUploadRepository.class),
                                 batchRepository, finalizationPolicyRepository, openSearchIndexService, auditLogService), mock(ai.philterd.workspace.service.DocumentDeliveryService.class),
-                        auditLogService));
+                        auditLogService),
+                blindService);
     }
 
     private TriageController buildTriageController() {
@@ -696,7 +897,8 @@ class BlindDoubleReviewIntegrationTest {
         when(batchAccessService.allowedBatchIds(any())).thenReturn(Set.of(BATCH_ID));
         return new TriageController(documentRepository, batchRepository, spanRepository,
                 userGroupsService, approvalRuleEvaluator, batchAccessService,
-                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)));
+                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)),
+                blindService);
     }
 
     private static Authentication alice() {

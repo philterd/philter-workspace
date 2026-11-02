@@ -100,6 +100,21 @@ This version scopes data sources to groups and confines Local Directory paths:
   `PHILTER_WORKSPACE_LOCAL_DIRECTORY_ALLOWED_ROOTS` to the folders Local Directory
   sources and destinations use, or they are refused, including existing ones.
 
+## Upgrading: independent blind double review
+
+This version makes [blind double review](admin/batches.md#reviewer-experience)
+independent:
+
+- **The second review is done on a copy.** The second reviewer starts the blind
+  review and works on their own copy of the detections instead of approving or
+  rejecting the document again.
+- **Finalizing waits for both reviews.** A document selected for blind double
+  review can be finalized once its second review is recorded and an approver
+  who did neither review has reconciled the two. This includes documents already
+  selected but not yet finalized: those with a second review recorded under the
+  earlier version need reconciling, and those without one need their blind
+  review.
+
 ## Upgrading from Arbiter
 
 Philter Workspace was named Arbiter. Moving an Arbiter deployment to Philter Workspace changes the

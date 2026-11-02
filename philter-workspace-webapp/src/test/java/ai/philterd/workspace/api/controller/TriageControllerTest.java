@@ -59,7 +59,8 @@ class TriageControllerTest {
         when(batchAccessService.allowedBatchIds(any())).thenReturn(Set.of());
         controller = new TriageController(documentRepository, batchRepository, spanRepository,
                 userGroupsService, new ApprovalRuleEvaluator(), batchAccessService,
-                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)));
+                new ai.philterd.workspace.webapp.ui.BatchLabels(org.mockito.Mockito.mock(ai.philterd.workspace.repository.GroupRepository.class)),
+                mock(ai.philterd.workspace.service.BlindDoubleReviewService.class));
     }
 
     private static Batch batch(final String id, final String groupId, final String name, final double documentThreshold) {
@@ -273,7 +274,8 @@ class TriageControllerTest {
         }
         controller = new TriageController(documentRepository, batchRepository, spanRepository,
                 userGroupsService, new ApprovalRuleEvaluator(), batchAccessService,
-                new ai.philterd.workspace.webapp.ui.BatchLabels(groups));
+                new ai.philterd.workspace.webapp.ui.BatchLabels(groups),
+                mock(ai.philterd.workspace.service.BlindDoubleReviewService.class));
         when(batchRepository.findAll(any(PageRequest.class))).thenReturn(new PageImpl<>(List.of(
                 batch("b1", "g1", "Sample", 0.25), batch("b2", "g2", "Sample", 0.25), batch("b3", "g1", "Other", 0.25))));
 

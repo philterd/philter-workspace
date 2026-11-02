@@ -67,6 +67,7 @@ class DocumentFinalizationServiceTest {
     void setUp() {
         service = new DocumentFinalizationService(documents, spans, batches, policies, certificates, locks,
                 new DocumentChangeGuard(documents, audit), new SourceRetentionService(documents, spans,
+                mock(ai.philterd.workspace.repository.BlindReviewSpanRepository.class),
                         pendingUploads, batches, policies, search, audit), delivery, audit);
         batch = new Batch();
         batch.setId("b1");
