@@ -188,7 +188,7 @@ review to start from.
 **The blind second review.** Once the first review is recorded, the document
 appears in **My Queue** for reviewers who have not been shown its spans.
 Anyone shown the document's spans before the second review was recorded,
-on its review page, in its audit history or audit trail, or through
+on its review page, in its comments, audit history, or audit trail, or through
 `GET /api/v1/documents/{id}/spans` or `/audit`, counts as shown, as do the
 first reviewer and anyone who approved it. None of these is available to the
 reviewer doing the blind review.
@@ -207,8 +207,8 @@ reviewer doing the blind review.
 - **Submit blind review** records it once every span in the copy is accepted
   or refused.
 
-A blind review cannot adjudicate spans, ask for a second opinion, or use Ask
-AI or Explain. While it is in progress the blind reviewer cannot approve,
+A blind review cannot adjudicate spans, ask for a second opinion, read the
+document's comments, or use Ask AI or Explain. While it is in progress the blind reviewer cannot approve,
 reject, unapprove, or unreject the document.
 
 An approver of the batch's group, or an administrator, can **Release blind

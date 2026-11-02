@@ -53,17 +53,20 @@ public class CommentController {
     private final UserRepository userRepository;
     private final DocumentAccessService documentAccessService;
     private final AuditLogService auditLogService;
+    private final ai.philterd.workspace.service.BlindDoubleReviewService blindReview;
 
     public CommentController(final DocumentRepository documentRepository,
                              final DocumentCommentRepository commentRepository,
                              final UserRepository userRepository,
                              final DocumentAccessService documentAccessService,
-                             final AuditLogService auditLogService) {
+                             final AuditLogService auditLogService,
+                             final ai.philterd.workspace.service.BlindDoubleReviewService blindReview) {
         this.documentRepository = documentRepository;
         this.commentRepository = commentRepository;
         this.userRepository = userRepository;
         this.documentAccessService = documentAccessService;
         this.auditLogService = auditLogService;
+        this.blindReview = blindReview;
     }
 
     public record CommentRequest(String text) {}
@@ -73,6 +76,13 @@ public class CommentController {
         final Document document = documentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Document not found."));
         documentAccessService.requireDocumentAccess(authentication, document);
+        // Comments can discuss the first review's decisions (#86): refused to the blind reviewer, and whoever else
+        // reads them cannot then do the blind review.
+        try {
+            blindReview.showSpans(authentication, document);
+        } catch (ai.philterd.workspace.service.BlindDoubleReviewService.Refused e) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT, e.getMessage());
+        }
 
         return commentRepository.findByDocumentIdOrderByTimestampDesc(id).stream()
                 .map(CommentController::toJson)
